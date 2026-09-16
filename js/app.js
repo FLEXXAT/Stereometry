@@ -1649,7 +1649,7 @@ addEventListener("keydown", (e) => {
 });
 const FILE_FORMAT = "stereometry";
 
-function saveToFile() {
+async function saveToFile() {
   const data = {
     format: FILE_FORMAT,
     version: 1,
@@ -1660,11 +1660,27 @@ function saveToFile() {
     constructions: S,
   };
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+  const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-");
+  const fileName = `stereometry-${shapeType}-${stamp}.json`;
+  if (window.showSaveFilePicker) {
+    try {
+      const handle = await window.showSaveFilePicker({
+        suggestedName: fileName,
+        types: [{ description: "Построения", accept: { "application/json": [".json"] } }],
+      });
+      const w = await handle.createWritable();
+      await w.write(blob);
+      await w.close();
+      toast(`Сохранено: ${handle.name}`);
+      return;
+    } catch (err) {
+      if (err.name === "AbortError") return;
+    }
+  }
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
-  const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-");
   a.href = url;
-  a.download = `stereometry-${shapeType}-${stamp}.json`;
+  a.download = fileName;
   document.body.append(a);
   a.click();
   a.remove();
