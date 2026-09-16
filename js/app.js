@@ -82,6 +82,11 @@ const SHAPES = {
     ],
   },
 };
+SHAPES.sphere = {
+  t: "Шар",
+  icon: '<circle cx="15" cy="15" r="11"/><path d="M4 15a11 4 0 0 0 22 0"/><path d="M26 15a11 4 0 0 0-22 0" stroke-dasharray="2 2"/>',
+  p: [["r", "Радиус", 1, 5, 3]],
+};
 const vals = {};
 for (const k in SHAPES) vals[k] = Object.fromEntries(SHAPES[k].p.map((x) => [x[0], x[4]]));
 
@@ -108,6 +113,19 @@ function buildShape() {
       [a / 2, -R / 2],
     ];
   };
+  if (shapeType === "sphere") {
+    const r = P.r;
+    shape = {
+      verts: [{ n: "O", p: [0, 0, 0] }],
+      faces: [],
+      edges: [],
+      size: 2 * r,
+      bc: [0, 0, 0],
+      sphere: r,
+    };
+    EXT = shape.size * 0.8;
+    return;
+  }
   switch (shapeType) {
     case "cube":
     case "box":
@@ -205,7 +223,7 @@ function buildShape() {
   shape = { verts, faces, edges: [...em.values()], size, bc };
   EXT = size * 0.8;
 }
-const S = { points: [], lines: [], sections: [], planes: [] };
+const S = { points: [], lines: [], sections: [], planes: [], strokes: [] };
 let uid = 1,
   history = [];
 function snapshot() {
@@ -222,6 +240,7 @@ function undo() {
   S.lines = o.S.lines;
   S.sections = o.S.sections;
   S.planes = o.S.planes || [];
+  S.strokes = o.S.strokes || [];
   uid = o.uid;
   pending = [];
   hover = null;
@@ -489,6 +508,13 @@ function getIsects() {
       push(X, `${L.name} ∩ ${pl.name}`);
     }
   }
+  if (shape.sphere) {
+    for (const L of Ls) {
+      if (!L.user) continue;
+      for (const { t, p } of lineSphere(L.a, sub(L.b, L.a)))
+        if (t >= L.t0 - e && t <= L.t1 + e) push(p, `${L.name} ∩ шар`);
+    }
+  }
   return (isectCache = out);
 }
 let tool = "point",
@@ -596,6 +622,14 @@ function computeHover(mx, my) {
     let best = null,
       bt = Infinity,
       bp = null;
+    if (f.faces && !f.userOnly && shape.sphere) {
+      const hit = lineSphere(r.o, r.d)[0];
+      if (hit && hit.t > 0) {
+        bt = hit.t;
+        bp = hit.p;
+        best = { sphere: true };
+      }
+    }
     for (const pl of cand) {
       const den = dot(pl.n, r.d);
       if (Math.abs(den) < 1e-9) continue;
@@ -608,6 +642,7 @@ function computeHover(mx, my) {
         bp = X;
       }
     }
+    if (best && best.sphere) return { kind: "sphere", pos: bp };
     if (best)
       return {
         kind: best.kind === "face" && !best.user ? "face" : "plane",
@@ -650,6 +685,65 @@ const POLY = [
   "восьмиугольник",
 ];
 
+function lineSphere(a, u) {
+  const R = shape.sphere,
+    A = dot(u, u),
+    B = dot(a, u),
+    Cc = dot(a, a) - R * R,
+    disc = B * B - A * Cc;
+  if (disc < -1e-12 * A * R * R) return [];
+  const q = Math.sqrt(Math.max(0, disc));
+  const ts = q < 1e-9 * Math.sqrt(A) * R ? [-B / A] : [(-B - q) / A, (-B + q) / A];
+  return ts.map((t) => ({ t, p: add(a, mul(u, t)) }));
+}
+function nextCircleName() {
+  const used = new Set(S.sections.map((s) => s.name));
+  for (let i = 1; ; i++) if (!used.has("ω" + subIdx(i))) return "ω" + subIdx(i);
+}
+function sphereSection(n, h) {
+  const R = shape.sphere;
+  if (Math.abs(h) >= R - 1e-9 * R) {
+    toast(
+      Math.abs(h) > R ? "Плоскость не пересекает шар" : "Плоскость касается шара в одной точке",
+    );
+    return;
+  }
+  const r = Math.sqrt(R * R - h * h),
+    c = mul(n, h),
+    helper = Math.abs(n[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0],
+    e1 = norm(cross(n, helper)),
+    e2 = cross(n, e1),
+    poly = [];
+  for (let i = 0; i < 72; i++) {
+    const a = (i / 72) * Math.PI * 2;
+    poly.push(add(c, add(mul(e1, r * Math.cos(a)), mul(e2, r * Math.sin(a)))));
+  }
+  snapshot();
+  const used = new Set(S.sections.map((s) => s.color));
+  const color = [0, 1, 2].find((i) => !used.has(i)) ?? S.sections.length % 3;
+  const name = nextCircleName();
+  S.sections.push({ id: uid++, poly, area: Math.PI * r * r, name, color, n, circle: true, r });
+  toast(`Сечение ${name} — круг радиуса ${r.toFixed(2)}, S ≈ ${(Math.PI * r * r).toFixed(2)}`);
+}
+function intersectLineSphere(L) {
+  const u = sub(L.b, L.a),
+    hits = lineSphere(L.a, u);
+  if (!hits.length) {
+    toast(`Прямая ${L.name} не пересекает шар`);
+    return;
+  }
+  snapshot();
+  const names = hits.map(({ t, p }) => {
+    ensureReach(L, t);
+    return addPoint(p).name;
+  });
+  toast(
+    hits.length === 1
+      ? `Прямая ${L.name} касается шара в точке ${names[0]}`
+      : `${L.name} пересекает шар в точках ${names.join(" и ")}`,
+  );
+}
+
 function makeSection(pts) {
   const [p1, p2, p3] = pts.map((x) => x.p);
   let n = cross(sub(p2, p1), sub(p3, p1));
@@ -659,6 +753,10 @@ function makeSection(pts) {
     return;
   }
   n = mul(n, 1 / nl);
+  if (shape.sphere) {
+    sphereSection(n, dot(n, p1));
+    return;
+  }
   const c = dot(n, p1),
     eps = 1e-7 * shape.size,
     V = shape.verts,
@@ -775,7 +873,9 @@ function onClick(mx, my) {
       toast(
         h.kind === "isect"
           ? `${p.name} = ${h.label}`
-          : `Точка ${p.name} на ${h.kind === "line" ? (h.line.edge ? "ребре " + h.line.name : "прямой") : "плоскости " + h.plane.name}`,
+          : h.kind === "sphere"
+            ? `Точка ${p.name} на поверхности шара`
+            : `Точка ${p.name} на ${h.kind === "line" ? (h.line.edge ? "ребре " + h.line.name : "прямой") : "плоскости " + h.plane.name}`,
       );
       break;
     }
@@ -826,7 +926,7 @@ function onClick(mx, my) {
       break;
     }
     case "plane": {
-      if (!h) return;
+      if (!h || h.kind === "sphere") return;
       const pl = h.plane,
         ex = S.planes.find((p) => p.src === pl.key);
       snapshot();
@@ -856,7 +956,12 @@ function onClick(mx, my) {
     }
     case "intersect": {
       if (!h) return;
-      const obj = h.kind === "line" ? { line: h.line } : { plane: h.plane, hl: h.hl };
+      const obj =
+        h.kind === "line"
+          ? { line: h.line }
+          : h.kind === "sphere"
+            ? { sphere: true }
+            : { plane: h.plane, hl: h.hl };
       if (!pending.length) {
         pending = [obj];
         break;
@@ -867,7 +972,14 @@ function onClick(mx, my) {
         (A.plane && obj.plane && A.plane.key === obj.plane.key)
       )
         return;
+      if (A.sphere && obj.sphere) return;
       pending = [];
+      if (A.sphere || obj.sphere) {
+        const other = A.sphere ? obj : A;
+        if (other.line) intersectLineSphere(other.line);
+        else sphereSection(other.plane.n, dot(other.plane.n, other.plane.c));
+        break;
+      }
       if (A.plane && obj.plane) {
         intersectPlanes(A.plane, obj.plane);
         break;
@@ -931,8 +1043,54 @@ function onClick(mx, my) {
   req();
 }
 const C = {};
+const FALLBACK = {
+  light: {
+    ink: "#18223a",
+    hidden: "#7a86a0",
+    accent: "#1f3fbf",
+    ext: "rgba(31,63,191,.55)",
+    par: "#11875a",
+    face: "rgba(31,63,191,.06)",
+    facehover: "rgba(240,150,0,.17)",
+    hover: "#f09600",
+    halo: "#f6f8fb",
+    plane: "#0f8a9a",
+    planef: "rgba(15,138,154,.1)",
+    sec0: "#d7263d",
+    sec1: "#7b3fe4",
+    sec2: "#e06a00",
+    secf0: "rgba(215,38,61,.2)",
+    secf1: "rgba(123,63,228,.2)",
+    secf2: "rgba(224,106,0,.2)",
+  },
+  dark: {
+    ink: "#f1f5f1",
+    hidden: "#8a9c95",
+    accent: "#8fb0ff",
+    ext: "rgba(143,176,255,.55)",
+    par: "#5fd49a",
+    face: "rgba(240,245,240,.05)",
+    facehover: "rgba(255,190,70,.16)",
+    hover: "#ffbe46",
+    halo: "#16211e",
+    plane: "#4fd0dd",
+    planef: "rgba(79,208,221,.09)",
+    sec0: "#ff6b7d",
+    sec1: "#b894ff",
+    sec2: "#ffa24c",
+    secf0: "rgba(255,107,125,.2)",
+    secf1: "rgba(184,148,255,.2)",
+    secf2: "rgba(255,162,76,.2)",
+  },
+};
+function currentTheme() {
+  const t = document.documentElement.dataset.theme;
+  if (t === "light" || t === "dark") return t;
+  return matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
 function readColors() {
-  const cs = getComputedStyle(document.documentElement);
+  const cs = getComputedStyle(document.documentElement),
+    fb = FALLBACK[currentTheme()];
   [
     "ink",
     "hidden",
@@ -951,7 +1109,7 @@ function readColors() {
     "secf0",
     "secf1",
     "secf2",
-  ].forEach((k) => (C[k] = cs.getPropertyValue("--c-" + k).trim()));
+  ].forEach((k) => (C[k] = cs.getPropertyValue("--c-" + k).trim() || fb[k]));
   req();
 }
 function seg3(a, b) {
@@ -978,6 +1136,19 @@ function stroke(a, b, col, w, dash) {
   ctx.setLineDash([]);
 }
 function isHidden(X) {
+  return shape.sphere ? sphereHidden(X) : polyHidden(X);
+}
+function sphereHidden(X) {
+  const d = opt.ortho ? fromView([0, 0, -1]) : norm(sub(fromView([0, 0, -cam.dist]), X)),
+    R = shape.sphere,
+    eps = 1e-4 * shape.size,
+    b = dot(X, d),
+    disc = b * b - (dot(X, X) - R * R);
+  if (disc <= 0) return false;
+  const q = Math.sqrt(disc);
+  return -b + q - Math.max(-b - q, eps) > eps;
+}
+function polyHidden(X) {
   const d = opt.ortho ? fromView([0, 0, -1]) : norm(sub(fromView([0, 0, -cam.dist]), X));
   const eps = 1e-4 * shape.size;
   let tmin = eps,
@@ -996,9 +1167,9 @@ function isHidden(X) {
   }
   return true;
 }
-function strokeVis(a, b, col, w) {
+function strokeVis(a, b, col, w, samples) {
   if (!opt.hidden) return stroke(a, b, col, w);
-  const N = 40,
+  const N = samples || 40,
     st = [];
   for (let i = 0; i <= N; i++) st.push(isHidden(lerp(a, b, i / N)));
   const border = (i) => {
@@ -1027,6 +1198,34 @@ function strokeVis(a, b, col, w) {
     if (hidden) stroke(A, B, col, Math.max(1.2, w * 0.6), [6, 5]);
     else stroke(A, B, col, w);
   }
+}
+function strokeLoopVis(pts, col, w) {
+  const n = pts.length,
+    vh = pts.map((p) => opt.hidden && isHidden(p)),
+    hid = vh.map((h, i) => h && vh[(i + 1) % n]);
+  let start = hid.findIndex((h, i) => h !== hid[(i + n - 1) % n]);
+  if (start < 0) start = 0;
+  let i = 0;
+  while (i < n) {
+    const h = hid[(start + i) % n];
+    ctx.beginPath();
+    let first = true;
+    while (i < n && hid[(start + i) % n] === h) {
+      const k = (start + i) % n;
+      if (first) seg3(pts[k], pts[(k + 1) % n]);
+      else {
+        const q = project(pts[(k + 1) % n]);
+        ctx.lineTo(q.x, q.y);
+      }
+      first = false;
+      i++;
+    }
+    ctx.strokeStyle = col;
+    ctx.lineWidth = h ? Math.max(1.2, w * 0.6) : w;
+    ctx.setLineDash(h ? [6, 5] : []);
+    ctx.stroke();
+  }
+  ctx.setLineDash([]);
 }
 function polyPath(pts) {
   ctx.beginPath();
@@ -1069,6 +1268,25 @@ let raf = 0;
 function req() {
   if (!raf) raf = requestAnimationFrame(render);
 }
+function drawSphere() {
+  const R = shape.sphere,
+    c = project([0, 0, 0]),
+    r = opt.ortho ? (F * R) / cam.dist : (F * R) / Math.sqrt(cam.dist ** 2 - R * R);
+  ctx.beginPath();
+  ctx.arc(c.x, c.y, r, 0, Math.PI * 2);
+  ctx.fillStyle = hover && hover.kind === "sphere" ? C.facehover : C.face;
+  if (opt.faces || (hover && hover.kind === "sphere")) ctx.fill();
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = C.ink;
+  ctx.stroke();
+  const eq = [];
+  for (let i = 0; i <= 96; i++) {
+    const a = (i / 96) * Math.PI * 2;
+    eq.push([R * Math.cos(a), 0, R * Math.sin(a)]);
+  }
+  eq.pop();
+  strokeLoopVis(eq, C.hidden, 1.4);
+}
 function render() {
   raf = 0;
   updateHint();
@@ -1088,6 +1306,7 @@ function render() {
         ctx.fill();
       });
   }
+  if (shape.sphere) drawSphere();
   S.planes.forEach((pl) => {
     const q = planeQuad(pl);
     polyPath(q);
@@ -1151,11 +1370,13 @@ function render() {
     if (l.solid) strokeVis(l.a, l.b, col, 2.4);
   }
 
-  S.sections.forEach((s) =>
-    s.poly.forEach((p, i) =>
-      strokeVis(p, s.poly[(i + 1) % s.poly.length], C["sec" + s.color], 2.4),
-    ),
-  );
+  S.sections.forEach((s) => {
+    if (s.circle) strokeLoopVis(s.poly, C["sec" + s.color], 2.4);
+    else
+      s.poly.forEach((p, i) =>
+        strokeVis(p, s.poly[(i + 1) % s.poly.length], C["sec" + s.color], 2.4),
+      );
+  });
   pending.forEach((pd) => {
     if (pd.line) {
       const [a, b] = lineRange(pd.line, pd.line.t0, pd.line.t1);
@@ -1214,14 +1435,16 @@ function render() {
       ctx.stroke();
     }
   }
+  drawStrokes();
   const bcS = project(shape.bc);
   V.forEach((v) => {
     const s = dotAt(v.p, 3.4, C.ink);
     if (opt.labels) {
       let dx = s.x - bcS.x,
         dy = s.y - bcS.y;
-      const l = Math.hypot(dx, dy) || 1;
-      label(v.n, s.x + (dx / l) * 17, s.y + (dy / l) * 17, C.ink);
+      const l = Math.hypot(dx, dy);
+      if (l < 1) label(v.n, s.x + 10, s.y + 14, C.ink);
+      else label(v.n, s.x + (dx / l) * 17, s.y + (dy / l) * 17, C.ink);
     }
   });
   const secColor = (p) => {
@@ -1278,9 +1501,20 @@ function render() {
     }
   }
   cv.style.cursor =
-    down && down.drag ? "grabbing" : tool === "rotate" ? "grab" : hover ? "pointer" : "crosshair";
+    down && down.drag
+      ? "grabbing"
+      : tool === "rotate"
+        ? "grab"
+        : tool === "pen"
+          ? pen.eraser
+            ? "cell"
+            : "crosshair"
+          : hover
+            ? "pointer"
+            : "crosshair";
 }
 const I = {
+  pen: '<path d="M4 20l1.2-4.4L16 4.8a2 2 0 0 1 2.8 0l.4.4a2 2 0 0 1 0 2.8L8.4 18.8z"/><path d="M14.5 6.5l3 3"/>',
   rotate: '<path d="M20 12a8 8 0 1 1-2.3-5.6"/><path d="M20 4v5h-5"/>',
   point:
     '<path d="M4 19 20 5" opacity=".35"/><circle cx="12" cy="12" r="3.4" fill="currentColor"/>',
@@ -1307,10 +1541,11 @@ const TOOLS = [
   ["intersect", "Пересечь"],
   ["section", "Сечение"],
   ["delete", "Удалить"],
+  ["pen", "Ручка", "P"],
 ];
 $("#toolbar").innerHTML = TOOLS.map(
-  ([id, t], i) =>
-    `<button class="tool" data-tool="${id}" title="${t} (${(i + 1) % 10})"><kbd>${(i + 1) % 10}</kbd><svg viewBox="0 0 24 24">${I[id]}</svg>${t}</button>`,
+  ([id, t, k], i) =>
+    `<button class="tool" data-tool="${id}" title="${t} (${k ?? (i + 1) % 10})"><kbd>${k ?? (i + 1) % 10}</kbd><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${I[id]}</svg>${t}</button>`,
 ).join("");
 $("#toolbar").addEventListener("click", (e) => {
   const b = e.target.closest("[data-tool]");
@@ -1323,6 +1558,8 @@ function setTool(id) {
   document
     .querySelectorAll(".tool")
     .forEach((b) => b.classList.toggle("on", b.dataset.tool === id));
+  $("#penPanel").hidden = id !== "pen";
+  if (id === "pen") buildPenPanel();
   req();
 }
 
@@ -1338,22 +1575,27 @@ function updateHint() {
           ? `Кликните по ребру или отрезку — точка разделит его в отношении ${$("#rm").value}:${$("#rn").value} от ближнего конца.`
           : "Кликните по ребру, прямой или грани, чтобы поставить точку. У середины ребра срабатывает привязка.",
     segment: n
-      ? `Выберите второй конец отрезка (первый — ${pending[0].name}).`
+      ? `Выберите второй конец отрезка (первый — ${pending[0]?.name}).`
       : "Выберите первую точку отрезка — вершину, точку или место на ребре.",
     line: n
-      ? `Выберите вторую точку прямой (первая — ${pending[0].name}).`
+      ? `Выберите вторую точку прямой (первая — ${pending[0]?.name}).`
       : "Выберите первую точку, через которую пройдёт прямая.",
     extend:
       "Кликните по ребру или отрезку, чтобы продлить его до прямой. Повторный клик убирает продолжение.",
     parallel: n
-      ? `Выберите точку, через которую пройдёт прямая, параллельная ${pending[0].line.name}.`
+      ? `Выберите точку, через которую пройдёт прямая, параллельная ${pending[0]?.line?.name}.`
       : "Выберите ребро или прямую, которой будет параллельна новая прямая.",
     plane:
       "Кликните по грани или сечению, чтобы продлить его плоскость. Повторный клик убирает продолжение.",
     intersect: n
-      ? `Выберите второй объект: пересечение с ${(pending[0].line || pending[0].plane).name}. Прямая ∩ прямая или прямая ∩ плоскость дают точку, плоскость ∩ плоскость — прямую.`
-      : "Выберите прямую, ребро, грань или плоскость. Продолжения достроятся сами.",
+      ? `Выберите второй объект: пересечение с ${(pending[0]?.line || pending[0]?.plane)?.name ?? "шаром"}. Прямая ∩ прямая или прямая ∩ плоскость дают точку, плоскость ∩ плоскость — прямую.`
+      : "Выберите прямую, ребро, грань, плоскость или шар. Продолжения достроятся сами.",
     section: `Выберите три точки плоскости сечения: ${n} из 3${n ? " (" + pending.map((p) => p.name).join(", ") + ")" : ""}. Esc — сбросить выбор.`,
+    pen: pen.eraser
+      ? "Ластик: проведите по рисунку, чтобы стереть штрихи. Правая кнопка — вращение."
+      : pen.screen
+        ? "Пишите левой кнопкой — штрихи закреплены на экране и не вращаются. Правая кнопка — вращение, E — ластик."
+        : "Рисуйте левой кнопкой — штрих ложится на грань или плоскость и вращается вместе с фигурой. Правая кнопка — вращение, E — ластик.",
     delete:
       "Кликните по своей точке, прямой или плоскости, чтобы удалить её. Сечения удаляются из списка слева.",
   };
@@ -1364,7 +1606,7 @@ function buildShapeButtons() {
   $("#shapes").innerHTML = Object.entries(SHAPES)
     .map(
       ([k, s]) =>
-        `<button class="shape${k === shapeType ? " on" : ""}" data-shape="${k}"><svg viewBox="0 0 30 30">${s.icon}</svg>${s.t}</button>`,
+        `<button class="shape${k === shapeType ? " on" : ""}" data-shape="${k}"><svg viewBox="0 0 30 30" width="30" height="30" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round">${s.icon}</svg>${s.t}</button>`,
     )
     .join("");
 }
@@ -1411,8 +1653,174 @@ $("#params").addEventListener("click", (e) => {
   buildParams();
   rebuild();
 });
+const PEN_COLORS = ["ink", "accent", "sec0", "par", "sec2"];
+const pen = { color: "accent", w: 3, eraser: false, screen: false };
+const strokeScreen = (st) =>
+  st.screen ? st.pts.map((p) => ({ x: p[0] + W / 2, y: p[1] + H / 2 })) : st.pts.map(project);
+let drawing = null;
+
+function penPlaneAt(mx, my) {
+  const saved = tool;
+  tool = "plane";
+  const h = computeHover(mx, my);
+  tool = saved;
+  if (h && h.kind === "sphere") return { n: norm(h.pos), c: h.pos, sphere: true };
+  if (h && h.plane) return { n: h.plane.n, c: h.plane.c };
+  return { n: fromView([0, 0, -1]), c: [0, 0, 0] };
+}
+function rayOnPlane(mx, my, pl) {
+  const r = getRay(mx, my),
+    den = dot(pl.n, r.d);
+  if (pl.sphere) {
+    const hit = lineSphere(r.o, r.d)[0];
+    if (hit && hit.t > 0) return hit.p;
+  }
+  if (Math.abs(den) < 1e-9) return null;
+  const t = dot(pl.n, sub(pl.c, r.o)) / den;
+  return add(r.o, mul(r.d, t));
+}
+function penStart(mx, my) {
+  if (pen.eraser) {
+    drawing = { eraser: true, saved: false };
+    penErase(mx, my);
+    return;
+  }
+  if (pen.screen) {
+    snapshot();
+    const stroke = {
+      id: uid++,
+      color: pen.color,
+      w: pen.w,
+      screen: true,
+      pts: [[mx - W / 2, my - H / 2, 0]],
+    };
+    S.strokes.push(stroke);
+    drawing = { stroke, last: { x: mx, y: my } };
+    req();
+    return;
+  }
+  const plane = penPlaneAt(mx, my),
+    p = rayOnPlane(mx, my, plane);
+  if (!p) return;
+  snapshot();
+  const stroke = { id: uid++, color: pen.color, w: pen.w, pts: [p] };
+  S.strokes.push(stroke);
+  drawing = { stroke, plane, last: { x: mx, y: my } };
+  req();
+}
+function penMove(mx, my) {
+  if (!drawing) return;
+  if (drawing.eraser) return penErase(mx, my);
+  if (Math.hypot(mx - drawing.last.x, my - drawing.last.y) < 1.5) return;
+  if (drawing.stroke.screen) {
+    drawing.stroke.pts.push([mx - W / 2, my - H / 2, 0]);
+    drawing.last = { x: mx, y: my };
+    req();
+    return;
+  }
+  const p = rayOnPlane(mx, my, drawing.plane);
+  if (!p) return;
+  drawing.stroke.pts.push(p);
+  drawing.last = { x: mx, y: my };
+  req();
+}
+function penEnd() {
+  if (drawing && !drawing.eraser) refreshList();
+  drawing = null;
+}
+function penErase(mx, my) {
+  const hit = S.strokes.filter((st) => {
+    const sp = strokeScreen(st);
+    if (sp.length === 1) return Math.hypot(sp[0].x - mx, sp[0].y - my) < 10;
+    for (let i = 1; i < sp.length; i++) if (distSeg(mx, my, sp[i - 1], sp[i]) < 10) return true;
+    return false;
+  });
+  if (!hit.length) return;
+  if (!drawing.saved) {
+    snapshot();
+    drawing.saved = true;
+  }
+  S.strokes = S.strokes.filter((st) => !hit.includes(st));
+  refreshList();
+  req();
+}
+function drawStrokes() {
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  for (const st of S.strokes) {
+    const sp = strokeScreen(st);
+    ctx.strokeStyle = C[st.color] || C.accent;
+    ctx.fillStyle = ctx.strokeStyle;
+    ctx.lineWidth = st.w;
+    if (sp.length === 1) {
+      ctx.beginPath();
+      ctx.arc(sp[0].x, sp[0].y, st.w / 2, 0, Math.PI * 2);
+      ctx.fill();
+      continue;
+    }
+    ctx.beginPath();
+    ctx.moveTo(sp[0].x, sp[0].y);
+    for (let i = 1; i < sp.length - 1; i++) {
+      const mx = (sp[i].x + sp[i + 1].x) / 2,
+        my = (sp[i].y + sp[i + 1].y) / 2;
+      ctx.quadraticCurveTo(sp[i].x, sp[i].y, mx, my);
+    }
+    const last = sp[sp.length - 1];
+    ctx.lineTo(last.x, last.y);
+    ctx.stroke();
+  }
+}
+function buildPenPanel() {
+  $("#penPanel").innerHTML =
+    PEN_COLORS.map(
+      (c) =>
+        `<button class="swatch${!pen.eraser && pen.color === c ? " on" : ""}" data-pcolor="${c}" style="--sw:var(--c-${c})" aria-label="Цвет"></button>`,
+    ).join("") +
+    '<span class="sep"></span>' +
+    [
+      [2, "Тонкая"],
+      [4, "Средняя"],
+      [7, "Толстая"],
+    ]
+      .map(
+        ([w, t]) =>
+          `<button class="pw${!pen.eraser && pen.w === w ? " on" : ""}" data-pw="${w}" title="${t}" aria-label="${t}"><i style="width:${w + 2}px;height:${w + 2}px"></i></button>`,
+      )
+      .join("") +
+    '<span class="sep"></span>' +
+    `<button class="ptext${pen.screen ? " on" : ""}" data-pscreen="1" title="Штрихи не вращаются вместе с фигурой">Поверх экрана</button>` +
+    `<button class="ptext${pen.eraser ? " on" : ""}" data-peraser="1">Ластик</button>` +
+    '<button class="ptext" data-pclear="1">Стереть рисунки</button>';
+}
+$("#penPanel").addEventListener("click", (e) => {
+  const b = e.target.closest("button");
+  if (!b) return;
+  if (b.dataset.pcolor) {
+    pen.color = b.dataset.pcolor;
+    pen.eraser = false;
+  } else if (b.dataset.pw) {
+    pen.w = +b.dataset.pw;
+    pen.eraser = false;
+  } else if (b.dataset.pscreen) {
+    pen.screen = !pen.screen;
+    pen.eraser = false;
+  } else if (b.dataset.peraser) pen.eraser = !pen.eraser;
+  else if (b.dataset.pclear) {
+    if (S.strokes.length) {
+      snapshot();
+      S.strokes = [];
+      refreshList();
+      toast("Рисунки стёрты. Отменить — Ctrl+Z");
+    }
+  }
+  buildPenPanel();
+  req();
+});
+
 function hasConstructions() {
-  return S.points.length || S.lines.length || S.sections.length || S.planes.length;
+  return (
+    S.points.length || S.lines.length || S.sections.length || S.planes.length || S.strokes.length
+  );
 }
 function rebuild() {
   buildShape();
@@ -1421,6 +1829,7 @@ function rebuild() {
     S.lines = [];
     S.sections = [];
     S.planes = [];
+    S.strokes = [];
     toast("Фигура изменилась — построения сброшены");
   }
   history = [];
@@ -1441,7 +1850,7 @@ function refreshList() {
   let h = "";
   S.sections.forEach((s) => {
     h += `<div class="obj"><span class="sw" style="background:var(--c-sec${s.color})"></span>
-    <div class="oi"><b>${esc(s.name)}</b><small>Сечение, ${POLY[s.poly.length] || s.poly.length + "-угольник"}, S ≈ ${s.area.toFixed(2)}</small></div>
+    <div class="oi"><b>${esc(s.name)}</b><small>Сечение, ${s.circle ? "круг, r ≈ " + s.r.toFixed(2) : POLY[s.poly.length] || s.poly.length + "-угольник"}, S ≈ ${s.area.toFixed(2)}</small></div>
     <button class="minibtn" data-secpl="${s.id}" title="Продлить плоскость сечения">${S.planes.some((p) => p.src === "s" + s.id) ? "Скрыть плоскость" : "Продлить"}</button>
     <button class="del" data-del="s${s.id}" aria-label="Удалить сечение">×</button></div>`;
   });
@@ -1455,6 +1864,10 @@ function refreshList() {
     <div class="oi"><b>${esc(p.name)}</b><small>Плоскость ${p.kind === "sec" ? "сечения" : "грани"}, продлена</small></div>
     <button class="del" data-del="q${p.id}" aria-label="Удалить плоскость">×</button></div>`;
   });
+  if (S.strokes.length)
+    h += `<div class="obj"><span class="sw" style="background:var(--c-${pen.color})"></span>
+    <div class="oi"><b>Рисунки</b><small>Штрихов ручкой: ${S.strokes.length}</small></div>
+    <button class="del" data-del="d0" aria-label="Стереть рисунки">×</button></div>`;
   const TL = {
     seg: "Отрезок",
     line: "Прямая",
@@ -1491,6 +1904,7 @@ $("#objs").addEventListener("click", (e) => {
   if (d[0] === "s") S.sections = S.sections.filter((x) => x.id !== id);
   if (d[0] === "p") S.points = S.points.filter((x) => x.id !== id);
   if (d[0] === "l") S.lines = S.lines.filter((x) => x.id !== id);
+  if (d[0] === "d") S.strokes = [];
   if (d[0] === "q") S.planes = S.planes.filter((x) => x.id !== id);
   if (d[0] === "s") S.planes = S.planes.filter((x) => x.src !== "s" + id);
   pending = [];
@@ -1542,6 +1956,7 @@ $("#clear").onclick = () => {
   S.lines = [];
   S.sections = [];
   S.planes = [];
+  S.strokes = [];
   pending = [];
   hover = null;
   refreshList();
@@ -1558,11 +1973,16 @@ $("#zout").onclick = () => zoom(1.15);
 let down = null;
 cv.addEventListener("pointerdown", (e) => {
   cv.setPointerCapture(e.pointerId);
+  if (tool === "pen" && e.button === 0 && !e.shiftKey) {
+    down = { pen: true };
+    penStart(e.offsetX, e.offsetY);
+    return;
+  }
   down = {
     x: e.offsetX,
     y: e.offsetY,
     btn: e.button,
-    pan: e.button !== 0 || e.shiftKey,
+    pan: tool === "pen" ? e.button === 1 || e.shiftKey : e.button !== 0 || e.shiftKey,
     drag: false,
     yaw: cam.yaw,
     pitch: cam.pitch,
@@ -1572,6 +1992,10 @@ cv.addEventListener("pointerdown", (e) => {
 });
 cv.addEventListener("pointermove", (e) => {
   mouse = { x: e.offsetX, y: e.offsetY };
+  if (down && down.pen) {
+    penMove(e.offsetX, e.offsetY);
+    return;
+  }
   if (down) {
     const dx = e.offsetX - down.x,
       dy = e.offsetY - down.y;
@@ -1595,6 +2019,10 @@ cv.addEventListener("pointermove", (e) => {
 cv.addEventListener("pointerup", (e) => {
   const d = down;
   down = null;
+  if (d && d.pen) {
+    penEnd();
+    return;
+  }
   if (d && !d.drag && d.btn === 0) onClick(e.offsetX, e.offsetY);
   else {
     hover = computeHover(e.offsetX, e.offsetY);
@@ -1607,6 +2035,10 @@ cv.addEventListener("pointerleave", () => {
     mouse = null;
     req();
   }
+});
+cv.addEventListener("pointercancel", () => {
+  if (down && down.pen) penEnd();
+  down = null;
 });
 cv.addEventListener("contextmenu", (e) => e.preventDefault());
 cv.addEventListener(
@@ -1639,6 +2071,16 @@ addEventListener("keydown", (e) => {
   }
   if (e.key === "Escape") {
     pending = [];
+    req();
+    return;
+  }
+  if (e.code === "KeyP" && !e.ctrlKey && !e.metaKey) {
+    setTool("pen");
+    return;
+  }
+  if (e.code === "KeyE" && tool === "pen") {
+    pen.eraser = !pen.eraser;
+    buildPenPanel();
     req();
     return;
   }
@@ -1702,6 +2144,15 @@ function loadData(data) {
   const sections = (c.sections || []).filter(
     (s) => Array.isArray(s.poly) && s.poly.length >= 3 && s.poly.every(isVec),
   );
+  const strokes = (c.strokes || [])
+    .filter((st) => Array.isArray(st.pts) && st.pts.length && st.pts.every(isVec))
+    .map((st) => ({
+      id: +st.id || 0,
+      color: PEN_COLORS.includes(st.color) ? st.color : "accent",
+      w: clamp(+st.w || 3, 1, 12),
+      screen: !!st.screen,
+      pts: st.pts,
+    }));
   const planes = (c.planes || []).filter(
     (p) => isVec(p.n) && isVec(p.c) && isVec(p.e1) && isVec(p.e2),
   );
@@ -1719,7 +2170,8 @@ function loadData(data) {
   S.lines = lines;
   S.sections = sections;
   S.planes = planes;
-  const ids = [...points, ...lines, ...sections, ...planes].map((o) => +o.id || 0);
+  S.strokes = strokes;
+  const ids = [...points, ...lines, ...sections, ...planes, ...strokes].map((o) => +o.id || 0);
   uid = Math.max(+data.uid || 1, ...ids.map((i) => i + 1));
   history = [];
   pending = [];
@@ -1787,4 +2239,6 @@ readColors();
 setTool("point");
 resize();
 resetView();
-document.fonts && document.fonts.ready.then(req);
+document.fonts && document.fonts.ready.then(readColors);
+addEventListener("load", readColors);
+addEventListener("pageshow", readColors);
