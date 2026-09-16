@@ -977,6 +977,57 @@ function stroke(a, b, col, w, dash) {
   ctx.stroke();
   ctx.setLineDash([]);
 }
+function isHidden(X) {
+  const d = opt.ortho ? fromView([0, 0, -1]) : norm(sub(fromView([0, 0, -cam.dist]), X));
+  const eps = 1e-4 * shape.size;
+  let tmin = eps,
+    tmax = Infinity;
+  for (const f of shape.faces) {
+    const s = dot(f.n, sub(X, f.c)),
+      den = dot(f.n, d);
+    if (Math.abs(den) < 1e-12) {
+      if (s > 1e-9) return false;
+      continue;
+    }
+    const b = -s / den;
+    if (den > 0) tmax = Math.min(tmax, b);
+    else tmin = Math.max(tmin, b);
+    if (tmin >= tmax - eps) return false;
+  }
+  return true;
+}
+function strokeVis(a, b, col, w) {
+  if (!opt.hidden) return stroke(a, b, col, w);
+  const N = 40,
+    st = [];
+  for (let i = 0; i <= N; i++) st.push(isHidden(lerp(a, b, i / N)));
+  const border = (i) => {
+    let lo = (i - 1) / N,
+      hi = i / N;
+    for (let k = 0; k < 18; k++) {
+      const mid = (lo + hi) / 2;
+      if (isHidden(lerp(a, b, mid)) === st[i - 1]) lo = mid;
+      else hi = mid;
+    }
+    return (lo + hi) / 2;
+  };
+  const parts = [];
+  let t0 = 0;
+  for (let i = 1; i <= N; i++) {
+    if (st[i] !== st[i - 1]) {
+      const t = border(i);
+      parts.push([t0, t, st[i - 1]]);
+      t0 = t;
+    }
+  }
+  parts.push([t0, 1, st[N]]);
+  for (const [p, q, hidden] of parts) {
+    const A = lerp(a, b, p),
+      B = lerp(a, b, q);
+    if (hidden) stroke(A, B, col, Math.max(1.2, w * 0.6), [6, 5]);
+    else stroke(A, B, col, w);
+  }
+}
 function polyPath(pts) {
   ctx.beginPath();
   pts.forEach((p, i) => {
@@ -1094,14 +1145,16 @@ function render() {
     if (l.ext) {
       const [a, b] = lineRange(L, L.t0, L.t1);
       ctx.globalAlpha = 0.62;
-      stroke(a, b, col, 1.3);
+      strokeVis(a, b, col, 1.3);
       ctx.globalAlpha = 1;
     }
-    if (l.solid) stroke(l.a, l.b, col, 2.4);
+    if (l.solid) strokeVis(l.a, l.b, col, 2.4);
   }
 
   S.sections.forEach((s) =>
-    s.poly.forEach((p, i) => stroke(p, s.poly[(i + 1) % s.poly.length], C["sec" + s.color], 2.4)),
+    s.poly.forEach((p, i) =>
+      strokeVis(p, s.poly[(i + 1) % s.poly.length], C["sec" + s.color], 2.4),
+    ),
   );
   pending.forEach((pd) => {
     if (pd.line) {
@@ -1574,6 +1627,16 @@ addEventListener("keydown", (e) => {
     undo();
     return;
   }
+  if ((e.ctrlKey || e.metaKey) && e.code === "KeyS") {
+    e.preventDefault();
+    saveToFile();
+    return;
+  }
+  if ((e.ctrlKey || e.metaKey) && e.code === "KeyO") {
+    e.preventDefault();
+    $("#fileInput").click();
+    return;
+  }
   if (e.key === "Escape") {
     pending = [];
     req();
@@ -1584,6 +1647,105 @@ addEventListener("keydown", (e) => {
     if (TOOLS[i]) setTool(TOOLS[i][0]);
   }
 });
+const FILE_FORMAT = "stereometry";
+
+function saveToFile() {
+  const data = {
+    format: FILE_FORMAT,
+    version: 1,
+    shape: shapeType,
+    params: vals[shapeType],
+    view: { yaw: cam.yaw, pitch: cam.pitch, dist: cam.dist, ortho: opt.ortho },
+    uid,
+    constructions: S,
+  };
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, "-");
+  a.href = url;
+  a.download = `stereometry-${shapeType}-${stamp}.json`;
+  document.body.append(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  toast("Построения сохранены в файл");
+}
+
+function isVec(v) {
+  return Array.isArray(v) && v.length === 3 && v.every(Number.isFinite);
+}
+
+function loadData(data) {
+  if (!data || data.format !== FILE_FORMAT || !SHAPES[data.shape]) {
+    throw new Error("Это не файл конструктора сечений");
+  }
+  const c = data.constructions || {};
+  const points = (c.points || []).filter((p) => isVec(p.p) && p.name);
+  const lines = (c.lines || []).filter((l) => isVec(l.a) && isVec(l.b));
+  const sections = (c.sections || []).filter(
+    (s) => Array.isArray(s.poly) && s.poly.length >= 3 && s.poly.every(isVec),
+  );
+  const planes = (c.planes || []).filter(
+    (p) => isVec(p.n) && isVec(p.c) && isVec(p.e1) && isVec(p.e2),
+  );
+
+  shapeType = data.shape;
+  for (const [k, , mn, mx] of SHAPES[shapeType].p) {
+    const v = +data.params?.[k];
+    if (Number.isFinite(v)) vals[shapeType][k] = clamp(v, mn, mx);
+  }
+  buildShapeButtons();
+  buildParams();
+  buildShape();
+
+  S.points = points;
+  S.lines = lines;
+  S.sections = sections;
+  S.planes = planes;
+  const ids = [...points, ...lines, ...sections, ...planes].map((o) => +o.id || 0);
+  uid = Math.max(+data.uid || 1, ...ids.map((i) => i + 1));
+  history = [];
+  pending = [];
+  hover = null;
+
+  if (typeof data.view?.ortho === "boolean") {
+    opt.ortho = data.view.ortho;
+    $('[data-opt="ortho"]').checked = opt.ortho;
+  }
+  resetView();
+  if (data.view) {
+    const { yaw, pitch, dist } = data.view;
+    if (Number.isFinite(yaw)) cam.yaw = yaw;
+    if (Number.isFinite(pitch)) cam.pitch = clamp(pitch, -1.55, 1.55);
+    if (Number.isFinite(dist)) cam.dist = clamp(dist, shape.size, shape.size * 9);
+  }
+  refreshList();
+  req();
+}
+
+async function openFile(file) {
+  if (!file) return;
+  try {
+    loadData(JSON.parse(await file.text()));
+    toast(`Открыт файл ${file.name}`);
+  } catch (err) {
+    toast(err instanceof SyntaxError ? "Файл повреждён: не удалось прочитать JSON" : err.message);
+  }
+}
+
+$("#saveFile").onclick = saveToFile;
+$("#openFile").onclick = () => $("#fileInput").click();
+$("#fileInput").addEventListener("change", (e) => {
+  openFile(e.target.files[0]);
+  e.target.value = "";
+});
+$("#wrap").addEventListener("dragover", (e) => e.preventDefault());
+$("#wrap").addEventListener("drop", (e) => {
+  e.preventDefault();
+  openFile(e.dataTransfer.files[0]);
+});
+
 function resize() {
   const r = $("#wrap").getBoundingClientRect();
   DPR = window.devicePixelRatio || 1;
