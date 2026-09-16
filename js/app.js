@@ -1,0 +1,1612 @@
+const add = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
+const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+const mul = (a, s) => [a[0] * s, a[1] * s, a[2] * s];
+const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const cross = (a, b) => [
+  a[1] * b[2] - a[2] * b[1],
+  a[2] * b[0] - a[0] * b[2],
+  a[0] * b[1] - a[1] * b[0],
+];
+const len = (a) => Math.hypot(a[0], a[1], a[2]);
+const norm = (a) => {
+  const l = len(a) || 1;
+  return [a[0] / l, a[1] / l, a[2] / l];
+};
+const lerp = (a, b, t) => add(a, mul(sub(b, a), t));
+const avg = (ps) =>
+  mul(
+    ps.reduce((s, p) => add(s, p), [0, 0, 0]),
+    1 / ps.length,
+  );
+const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
+const $ = (s) => document.querySelector(s);
+const esc = (s) =>
+  String(s).replace(
+    /[&<>"']/g,
+    (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c],
+  );
+const SUBS = "₀₁₂₃₄₅₆₇₈₉";
+const subIdx = (n) =>
+  String(n)
+    .split("")
+    .map((d) => SUBS[+d])
+    .join("");
+const SHAPES = {
+  cube: {
+    t: "Куб",
+    icon: '<path d="M6 11h13v13H6zM11 6h13v13H11zM6 11l5-5M19 11l5-5M19 24l5-5M6 24l5-5"/>',
+    p: [["a", "Ребро", 1, 8, 4]],
+  },
+  box: {
+    t: "Прямоугольный параллелепипед",
+    icon: '<path d="M3 13h18v10H3zM9 8h18v10H9zM3 13l6-5M21 13l6-5M21 23l6-5M3 23l6-5"/>',
+    p: [
+      ["a", "Длина", 1, 8, 5.5],
+      ["b", "Ширина", 1, 8, 3.2],
+      ["c", "Высота", 1, 8, 3.5],
+    ],
+  },
+  oblique: {
+    t: "Наклонный параллелепипед",
+    icon: '<path d="M2 24h16l-4-12H-2zM8 21h16l-4-12H4zM2 24l6-3M18 24l6-3M14 12l6-3M-2 12l6-3" transform="translate(4 -1)"/>',
+    p: [
+      ["a", "Длина", 1, 8, 4.5],
+      ["b", "Ширина", 1, 8, 3],
+      ["c", "Высота", 1, 8, 3.5],
+      ["sx", "Наклон вдоль длины", -4, 4, 1.6],
+      ["sz", "Наклон вдоль ширины", -4, 4, 0.6],
+    ],
+  },
+  pyr4: {
+    t: "Четырёхугольная пирамида",
+    icon: '<path d="M4 22h16l6-5H10zM15 3 4 22M15 3l5 19M15 3l11 14M15 3 10 17"/>',
+    p: [
+      ["a", "Сторона основания", 1, 8, 4.5],
+      ["h", "Высота", 1, 9, 4.5],
+    ],
+  },
+  pyr3: {
+    t: "Треугольная пирамида",
+    icon: '<path d="M4 24h20L15 17zM14 3 4 24M14 3l10 21M14 3l1 14"/>',
+    p: [
+      ["a", "Сторона основания", 1, 8, 5],
+      ["h", "Высота", 1, 9, 4.5],
+    ],
+  },
+  prism3: {
+    t: "Треугольная призма",
+    icon: '<path d="M4 25h18l-8-6zM4 9h18l-8-6zM4 9v16M22 9v16M14 3v16"/>',
+    p: [
+      ["a", "Сторона основания", 1, 8, 4.5],
+      ["h", "Высота", 1, 9, 4],
+    ],
+  },
+};
+const vals = {};
+for (const k in SHAPES) vals[k] = Object.fromEntries(SHAPES[k].p.map((x) => [x[0], x[4]]));
+
+let shapeType = "cube",
+  shape = null,
+  EXT = 3;
+
+function buildShape() {
+  const P = vals[shapeType],
+    verts = [];
+  let faces;
+  const v = (n, x, y, z) => verts.push({ n, p: [x, y, z] });
+  const quad = (a, b) => [
+    [-a / 2, -b / 2],
+    [-a / 2, b / 2],
+    [a / 2, b / 2],
+    [a / 2, -b / 2],
+  ];
+  const tri = (a) => {
+    const R = a / Math.sqrt(3);
+    return [
+      [-a / 2, -R / 2],
+      [0, R],
+      [a / 2, -R / 2],
+    ];
+  };
+  switch (shapeType) {
+    case "cube":
+    case "box":
+    case "oblique": {
+      const a = P.a,
+        b = shapeType === "cube" ? P.a : P.b,
+        c = shapeType === "cube" ? P.a : P.c;
+      const sx = P.sx || 0,
+        sz = P.sz || 0,
+        q = quad(a, b);
+      [..."ABCD"].forEach((n, i) => v(n, q[i][0], 0, q[i][1]));
+      [..."ABCD"].forEach((n, i) => v(n + "₁", q[i][0] + sx, c, q[i][1] + sz));
+      faces = [
+        [0, 1, 2, 3],
+        [4, 5, 6, 7],
+        [0, 1, 5, 4],
+        [1, 2, 6, 5],
+        [2, 3, 7, 6],
+        [3, 0, 4, 7],
+      ];
+      break;
+    }
+    case "pyr4": {
+      const q = quad(P.a, P.a);
+      [..."ABCD"].forEach((n, i) => v(n, q[i][0], 0, q[i][1]));
+      v("S", 0, P.h, 0);
+      faces = [
+        [0, 1, 2, 3],
+        [0, 1, 4],
+        [1, 2, 4],
+        [2, 3, 4],
+        [3, 0, 4],
+      ];
+      break;
+    }
+    case "pyr3": {
+      const t = tri(P.a);
+      [..."ABC"].forEach((n, i) => v(n, t[i][0], 0, t[i][1]));
+      v("S", 0, P.h, 0);
+      faces = [
+        [0, 1, 2],
+        [0, 1, 3],
+        [1, 2, 3],
+        [2, 0, 3],
+      ];
+      break;
+    }
+    case "prism3": {
+      const t = tri(P.a);
+      [..."ABC"].forEach((n, i) => v(n, t[i][0], 0, t[i][1]));
+      [..."ABC"].forEach((n, i) => v(n + "₁", t[i][0], P.h, t[i][1]));
+      faces = [
+        [0, 1, 2],
+        [3, 4, 5],
+        [0, 1, 4, 3],
+        [1, 2, 5, 4],
+        [2, 0, 3, 5],
+      ];
+      break;
+    }
+  }
+  const mn = [Infinity, Infinity, Infinity],
+    mx = [-Infinity, -Infinity, -Infinity];
+  verts.forEach(({ p }) => {
+    for (let i = 0; i < 3; i++) {
+      mn[i] = Math.min(mn[i], p[i]);
+      mx[i] = Math.max(mx[i], p[i]);
+    }
+  });
+  const ctr = mul(add(mn, mx), 0.5);
+  verts.forEach((v) => (v.p = sub(v.p, ctr)));
+  const size = Math.max(...sub(mx, mn));
+  const bc = avg(verts.map((v) => v.p));
+  faces = faces.map((idx) => {
+    const pts = idx.map((i) => verts[i].p),
+      c = avg(pts);
+    let n = norm(cross(sub(pts[1], pts[0]), sub(pts[2], pts[0])));
+    if (dot(n, sub(c, bc)) < 0) {
+      idx = idx.slice().reverse();
+      n = mul(n, -1);
+    }
+    return { idx, n, c };
+  });
+  const em = new Map();
+  faces.forEach((f, fi) =>
+    f.idx.forEach((a, k) => {
+      const b = f.idx[(k + 1) % f.idx.length],
+        i = Math.min(a, b),
+        j = Math.max(a, b),
+        key = i + "-" + j;
+      if (!em.has(key)) em.set(key, { i, j, faces: [], name: verts[i].n + verts[j].n });
+      em.get(key).faces.push(fi);
+    }),
+  );
+  shape = { verts, faces, edges: [...em.values()], size, bc };
+  EXT = size * 0.8;
+}
+const S = { points: [], lines: [], sections: [], planes: [] };
+let uid = 1,
+  history = [];
+function snapshot() {
+  history.push(JSON.stringify({ S, uid }));
+  if (history.length > 150) history.shift();
+}
+function undo() {
+  if (!history.length) {
+    toast("Отменять нечего");
+    return;
+  }
+  const o = JSON.parse(history.pop());
+  S.points = o.S.points;
+  S.lines = o.S.lines;
+  S.sections = o.S.sections;
+  S.planes = o.S.planes || [];
+  uid = o.uid;
+  pending = [];
+  hover = null;
+  refreshList();
+  req();
+}
+const POOL = [..."KLMNPQRTEFGHXYZUVWOIJ"];
+function nextName() {
+  const used = new Set(allPoints().map((p) => p.name));
+  for (let s = 0; ; s++)
+    for (const L of POOL) {
+      const n = s ? L + subIdx(s) : L;
+      if (!used.has(n)) return n;
+    }
+}
+const allPoints = () =>
+  shape.verts.map((v, i) => ({ id: "v" + i, name: v.n, p: v.p, vertex: true })).concat(S.points);
+function findPointAt(p) {
+  const tol = 1e-5 * shape.size;
+  return allPoints().find((q) => len(sub(q.p, p)) < tol);
+}
+function addPoint(p, kind = "user") {
+  const ex = findPointAt(p);
+  if (ex) return ex;
+  const pt = { id: uid++, name: nextName(), p, kind };
+  S.points.push(pt);
+  return pt;
+}
+function newLine(a, b, o) {
+  const l = { id: uid++, a, b, solid: false, ext: false, kind: "seg", ...o };
+  S.lines.push(l);
+  return l;
+}
+function allLines() {
+  const V = shape.verts;
+  const edges = shape.edges.map((e, k) => ({
+    key: "e" + k,
+    a: V[e.i].p,
+    b: V[e.j].p,
+    t0: 0,
+    t1: 1,
+    edge: e,
+    name: e.name,
+  }));
+  const user = S.lines.map((l) => {
+    const E = l.ext ? EXT / len(sub(l.b, l.a)) : 0;
+    return {
+      key: "l" + l.id,
+      a: l.a,
+      b: l.b,
+      user: l,
+      solid: l.solid,
+      name: l.name,
+      t0: l.ext ? Math.min(-E, l.tmin ?? 0) : 0,
+      t1: l.ext ? Math.max(1 + E, l.tmax ?? 1) : 1,
+    };
+  });
+  return edges.concat(user);
+}
+const cv = $("#cv"),
+  ctx = cv.getContext("2d");
+let W = 0,
+  H = 0,
+  DPR = 1,
+  F = 500;
+const cam = { yaw: -0.55, pitch: 0.42, dist: 14 },
+  pan = { x: 0, y: 0 };
+const opt = {
+  hidden: true,
+  faces: true,
+  labels: true,
+  ortho: true,
+  snap: true,
+  isnap: true,
+  ratio: false,
+};
+
+function toView(p) {
+  const cy = Math.cos(cam.yaw),
+    sy = Math.sin(cam.yaw),
+    cp = Math.cos(cam.pitch),
+    sp = Math.sin(cam.pitch);
+  const x1 = p[0] * cy + p[2] * sy,
+    z1 = -p[0] * sy + p[2] * cy;
+  return [x1, p[1] * cp + z1 * sp, -p[1] * sp + z1 * cp];
+}
+function fromView(v) {
+  const cy = Math.cos(cam.yaw),
+    sy = Math.sin(cam.yaw),
+    cp = Math.cos(cam.pitch),
+    sp = Math.sin(cam.pitch);
+  const y = v[1] * cp - v[2] * sp,
+    z1 = v[1] * sp + v[2] * cp;
+  return [v[0] * cy - z1 * sy, y, v[0] * sy + z1 * cy];
+}
+function projV(v) {
+  const d = opt.ortho ? cam.dist : Math.max(0.05, v[2] + cam.dist);
+  return { x: W / 2 + pan.x + (F * v[0]) / d, y: H / 2 + pan.y - (F * v[1]) / d };
+}
+const project = (p) => projV(toView(p));
+function getRay(mx, my) {
+  const sx = (mx - W / 2 - pan.x) / F,
+    sy = -(my - H / 2 - pan.y) / F;
+  if (opt.ortho)
+    return { o: fromView([sx * cam.dist, sy * cam.dist, -1000]), d: fromView([0, 0, 1]) };
+  return { o: fromView([0, 0, -cam.dist]), d: norm(fromView([sx, sy, 1])) };
+}
+function isFront(f) {
+  if (opt.ortho) return dot(f.n, fromView([0, 0, -1])) > 0;
+  return dot(f.n, sub(fromView([0, 0, -cam.dist]), f.c)) > 0;
+}
+function resetView() {
+  cam.yaw = -0.55;
+  cam.pitch = 0.42;
+  pan.x = pan.y = 0;
+  cam.dist = shape.size * (opt.ortho ? 2.6 : 3.4);
+  req();
+}
+function lineLine(p0, u, q0, v) {
+  const w0 = sub(p0, q0),
+    a = dot(u, u),
+    b = dot(u, v),
+    c = dot(v, v),
+    d = dot(u, w0),
+    e = dot(v, w0),
+    den = a * c - b * b;
+  if (den < 1e-10 * a * c) return { parallel: true };
+  const s = (b * e - c * d) / den,
+    t = (a * e - b * d) / den,
+    P = add(p0, mul(u, s)),
+    Q = add(q0, mul(v, t));
+  return { s, t, p: P, dist: len(sub(P, Q)) };
+}
+function distSeg(mx, my, a, b) {
+  const dx = b.x - a.x,
+    dy = b.y - a.y,
+    l2 = dx * dx + dy * dy;
+  const t = l2 ? clamp(((mx - a.x) * dx + (my - a.y) * dy) / l2, 0, 1) : 0;
+  return Math.hypot(mx - a.x - t * dx, my - a.y - t * dy);
+}
+function inConvex(pts, n, X) {
+  const eps = -1e-7 * shape.size * shape.size;
+  return pts.every((A, k) => dot(cross(sub(pts[(k + 1) % pts.length], A), sub(X, A)), n) >= eps);
+}
+function polyNormal(pts) {
+  const c = avg(pts);
+  let n = [0, 0, 0];
+  pts.forEach((p, i) => {
+    n = add(n, cross(sub(p, c), sub(pts[(i + 1) % pts.length], c)));
+  });
+  return norm(n);
+}
+function facePlane(i) {
+  const f = shape.faces[i],
+    pts = f.idx.map((k) => shape.verts[k].p);
+  return {
+    key: "f" + i,
+    n: f.n,
+    c: f.c,
+    pts,
+    kind: "face",
+    name: "(" + f.idx.map((k) => shape.verts[k].n).join("") + ")",
+  };
+}
+function secPlane(s) {
+  if (!s.n) s.n = polyNormal(s.poly);
+  return {
+    key: "s" + s.id,
+    n: s.n,
+    c: avg(s.poly),
+    pts: s.poly,
+    kind: "sec",
+    name: "(" + s.name + ")",
+  };
+}
+function planeQuad(pl) {
+  const { c, e1, e2, r1, r2 } = pl;
+  return [
+    [1, 1],
+    [-1, 1],
+    [-1, -1],
+    [1, -1],
+  ].map(([a, b]) => add(c, add(mul(e1, a * r1), mul(e2, b * r2))));
+}
+function inQuad(pl, X) {
+  const d = sub(X, pl.c);
+  return Math.abs(dot(d, pl.e1)) <= pl.r1 + 1e-9 && Math.abs(dot(d, pl.e2)) <= pl.r2 + 1e-9;
+}
+function extendPlane(pl) {
+  let ex = S.planes.find((p) => p.src === pl.key);
+  if (ex) return ex;
+  const e1 = norm(sub(pl.pts[1], pl.pts[0])),
+    e2 = cross(pl.n, e1),
+    R = shape.size * 1.05;
+  ex = {
+    id: uid++,
+    src: pl.key,
+    kind: pl.kind,
+    n: pl.n,
+    c: pl.c,
+    e1,
+    e2,
+    r1: R,
+    r2: R,
+    name: pl.name,
+  };
+  S.planes.push(ex);
+  return ex;
+}
+function growPlane(pl, X) {
+  const d = sub(X, pl.c);
+  pl.r1 = Math.max(pl.r1, Math.abs(dot(d, pl.e1)) * 1.15);
+  pl.r2 = Math.max(pl.r2, Math.abs(dot(d, pl.e2)) * 1.15);
+}
+const userPlaneAsPlane = (p) => ({
+  key: p.src,
+  n: p.n,
+  c: p.c,
+  pts: planeQuad(p),
+  kind: p.kind,
+  name: p.name,
+  user: p,
+});
+const ratioK = () => {
+  const m = Math.max(0.001, +$("#rm").value || 1),
+    n = Math.max(0.001, +$("#rn").value || 1);
+  return m / (m + n);
+};
+let isectCache = null;
+function getIsects() {
+  if (isectCache) return isectCache;
+  const out = [],
+    Ls = allLines(),
+    tol = 1e-4 * shape.size,
+    e = 1e-6;
+  const push = (p, label) => {
+    if (findPointAt(p)) return;
+    if (out.some((q) => len(sub(q.p, p)) < 1e-5 * shape.size)) return;
+    out.push({ p, label });
+  };
+  for (let i = 0; i < Ls.length; i++)
+    for (let j = i + 1; j < Ls.length; j++) {
+      const A = Ls[i],
+        B = Ls[j];
+      if (A.edge && B.edge) continue;
+      const r = lineLine(A.a, sub(A.b, A.a), B.a, sub(B.b, B.a));
+      if (r.parallel || r.dist > tol) continue;
+      if (r.s < A.t0 - e || r.s > A.t1 + e || r.t < B.t0 - e || r.t > B.t1 + e) continue;
+      push(r.p, `${A.name} ∩ ${B.name}`);
+    }
+  const planes = [];
+  shape.faces.forEach((_, i) => planes.push({ pl: facePlane(i), onlyUser: true }));
+  S.sections.forEach((s) => planes.push({ pl: secPlane(s) }));
+  S.planes.forEach((p) => planes.push({ pl: userPlaneAsPlane(p) }));
+  for (const { pl, onlyUser } of planes) {
+    for (const L of Ls) {
+      if (onlyUser && !L.user) continue;
+      const u = sub(L.b, L.a),
+        den = dot(pl.n, u);
+      if (Math.abs(den) < 1e-9 * len(u)) continue;
+      const t = dot(pl.n, sub(pl.c, L.a)) / den;
+      if (t < L.t0 - e || t > L.t1 + e) continue;
+      const X = add(L.a, mul(u, t));
+      if (pl.user ? !inQuad(pl.user, X) : !inConvex(pl.pts, pl.n, X)) continue;
+      push(X, `${L.name} ∩ ${pl.name}`);
+    }
+  }
+  return (isectCache = out);
+}
+let tool = "point",
+  pending = [],
+  hover = null,
+  mouse = null;
+
+function hoverFilter() {
+  const place = {
+    points: true,
+    lines: true,
+    faces: true,
+    sections: true,
+    planes: true,
+    place: true,
+  };
+  switch (tool) {
+    case "point":
+    case "segment":
+    case "line":
+    case "section":
+      return place;
+    case "extend":
+      return { lines: true, finite: true };
+    case "plane":
+      return { faces: true, sections: true, planes: true };
+    case "parallel":
+      return pending.length ? place : { lines: true };
+    case "intersect":
+      return { lines: true, faces: true, sections: true, planes: true };
+    case "delete":
+      return { points: true, lines: true, planes: true, userOnly: true };
+  }
+  return null;
+}
+function computeHover(mx, my) {
+  const f = hoverFilter();
+  if (!f) return null;
+  if (f.points) {
+    let best = null,
+      bd = 11;
+    for (const pt of allPoints()) {
+      if (f.userOnly && pt.vertex) continue;
+      const s = project(pt.p),
+        d = Math.hypot(s.x - mx, s.y - my);
+      if (d < bd) {
+        bd = d;
+        best = pt;
+      }
+    }
+    if (best) return { kind: "point", pt: best, pos: best.p };
+  }
+  if (f.place && opt.isnap) {
+    let best = null,
+      bd = 13;
+    for (const q of getIsects()) {
+      const s = project(q.p),
+        d = Math.hypot(s.x - mx, s.y - my);
+      if (d < bd) {
+        bd = d;
+        best = q;
+      }
+    }
+    if (best) return { kind: "isect", pos: best.p, label: best.label };
+  }
+  if (f.lines) {
+    let best = null,
+      bd = 7;
+    for (const L of allLines()) {
+      if (f.userOnly && !L.user) continue;
+      if (f.finite && !(L.edge || L.solid)) continue;
+      const u = sub(L.b, L.a);
+      const d = distSeg(mx, my, project(add(L.a, mul(u, L.t0))), project(add(L.a, mul(u, L.t1))));
+      if (d < bd) {
+        bd = d;
+        best = L;
+      }
+    }
+    if (best) {
+      const L = best,
+        u = sub(L.b, L.a),
+        r = getRay(mx, my),
+        res = lineLine(L.a, u, r.o, r.d);
+      let t = clamp(res.parallel ? 0.5 : res.s, L.t0, L.t1);
+      if (f.place) {
+        const finite = L.edge || L.solid;
+        if (finite && opt.ratio) {
+          const k = ratioK();
+          t = clamp(t, 0, 1) < 0.5 ? k : 1 - k;
+        } else if (finite && opt.snap) {
+          const m = project(add(L.a, mul(u, 0.5)));
+          if (Math.hypot(m.x - mx, m.y - my) < 10) t = 0.5;
+        }
+      }
+      return { kind: "line", line: L, t, pos: add(L.a, mul(u, t)) };
+    }
+  }
+  if (f.faces || f.sections || f.planes) {
+    const cand = [];
+    if (f.faces && !f.userOnly) shape.faces.forEach((_, i) => cand.push(facePlane(i)));
+    if (f.sections && !f.userOnly) S.sections.forEach((s) => cand.push(secPlane(s)));
+    if (f.planes) S.planes.forEach((p) => cand.push(userPlaneAsPlane(p)));
+    const r = getRay(mx, my),
+      tie = 1e-6 * shape.size;
+    let best = null,
+      bt = Infinity,
+      bp = null;
+    for (const pl of cand) {
+      const den = dot(pl.n, r.d);
+      if (Math.abs(den) < 1e-9) continue;
+      const t = dot(pl.n, sub(pl.c, r.o)) / den;
+      if (t <= 0 || t >= bt - tie) continue;
+      const X = add(r.o, mul(r.d, t));
+      if (pl.user ? inQuad(pl.user, X) : inConvex(pl.pts, pl.n, X)) {
+        bt = t;
+        best = pl;
+        bp = X;
+      }
+    }
+    if (best)
+      return {
+        kind: best.kind === "face" && !best.user ? "face" : "plane",
+        plane: best,
+        pos: bp,
+        hl: best.pts,
+      };
+  }
+  return null;
+}
+function resolvePoint(h) {
+  if (!h) return null;
+  if (h.kind === "point") return h.pt;
+  const ex = findPointAt(h.pos);
+  if (ex) return ex;
+  snapshot();
+  return addPoint(h.pos);
+}
+function ensureReach(L, t) {
+  if (t >= L.t0 - 1e-6 && t <= L.t1 + 1e-6) return;
+  let l = L.user;
+  if (!l) {
+    l =
+      S.lines.find((x) => x.src === L.key) ||
+      newLine(L.a, L.b, { kind: "ext", ext: true, name: "(" + L.name + ")", src: L.key });
+  }
+  l.ext = true;
+  l.tmin = Math.min(l.tmin ?? 0, t - 0.1);
+  l.tmax = Math.max(l.tmax ?? 1, t + 0.1);
+}
+const POLY = [
+  "",
+  "",
+  "",
+  "треугольник",
+  "четырёхугольник",
+  "пятиугольник",
+  "шестиугольник",
+  "семиугольник",
+  "восьмиугольник",
+];
+
+function makeSection(pts) {
+  const [p1, p2, p3] = pts.map((x) => x.p);
+  let n = cross(sub(p2, p1), sub(p3, p1));
+  const nl = len(n);
+  if (nl < 1e-9 * shape.size * shape.size) {
+    toast("Точки лежат на одной прямой — плоскость не задана");
+    return;
+  }
+  n = mul(n, 1 / nl);
+  const c = dot(n, p1),
+    eps = 1e-7 * shape.size,
+    V = shape.verts,
+    raw = [];
+  for (const e of shape.edges) {
+    const A = V[e.i].p,
+      B = V[e.j].p,
+      da = dot(n, A) - c,
+      db = dot(n, B) - c;
+    if (Math.abs(da) < eps) raw.push(A);
+    if (Math.abs(db) < eps) raw.push(B);
+    if ((da > eps && db < -eps) || (da < -eps && db > eps))
+      raw.push(add(A, mul(sub(B, A), da / (da - db))));
+  }
+  const poly = [];
+  for (const p of raw) if (!poly.some((q) => len(sub(p, q)) < 1e-6 * shape.size)) poly.push(p);
+  if (poly.length < 3) {
+    toast("Плоскость не пересекает фигуру по многоугольнику");
+    return;
+  }
+  const cen = avg(poly),
+    e1 = norm(sub(poly[0], cen)),
+    e2 = cross(n, e1);
+  poly.sort((a, b) => {
+    const qa = sub(a, cen),
+      qb = sub(b, cen);
+    return Math.atan2(dot(qa, e2), dot(qa, e1)) - Math.atan2(dot(qb, e2), dot(qb, e1));
+  });
+  let ar = [0, 0, 0];
+  poly.forEach((p, i) => {
+    ar = add(ar, cross(sub(p, cen), sub(poly[(i + 1) % poly.length], cen)));
+  });
+  const area = len(ar) / 2;
+  snapshot();
+  const name = poly.map((p) => addPoint(p, "sec").name).join("");
+  const used = new Set(S.sections.map((s) => s.color));
+  const color = [0, 1, 2].find((i) => !used.has(i)) ?? S.sections.length % 3;
+  S.sections.push({ id: uid++, poly, area, name, color, n });
+  toast(
+    `Сечение ${name} — ${POLY[poly.length] || poly.length + "-угольник"}, S ≈ ${area.toFixed(2)}`,
+  );
+}
+
+function planeReach(pl, X) {
+  if (pl.user) {
+    growPlane(pl.user, X);
+    return;
+  }
+  if (inConvex(pl.pts, pl.n, X)) return;
+  growPlane(extendPlane(pl), X);
+}
+function intersectLinePlane(L, pl) {
+  const u = sub(L.b, L.a),
+    den = dot(pl.n, u),
+    h = dot(pl.n, sub(pl.c, L.a));
+  if (Math.abs(den) < 1e-9 * len(u)) {
+    toast(
+      Math.abs(h) < 1e-6 * shape.size
+        ? `Прямая ${L.name} лежит в плоскости ${pl.name}`
+        : `Прямая ${L.name} параллельна плоскости ${pl.name}`,
+    );
+    return;
+  }
+  const t = h / den;
+  if (Math.abs(t) > 60) {
+    toast("Точка пересечения слишком далеко");
+    return;
+  }
+  const X = add(L.a, mul(u, t));
+  snapshot();
+  ensureReach(L, t);
+  planeReach(pl, X);
+  const p = addPoint(X);
+  toast(`${p.name} = ${L.name} ∩ ${pl.name}`);
+}
+function intersectPlanes(P1, P2) {
+  const d = cross(P1.n, P2.n),
+    dl = len(d);
+  if (dl < 1e-7) {
+    toast(
+      Math.abs(dot(P1.n, sub(P2.c, P1.c))) < 1e-6 * shape.size
+        ? "Это одна и та же плоскость"
+        : "Плоскости параллельны",
+    );
+    return;
+  }
+  const h1 = dot(P1.n, P1.c),
+    h2 = dot(P2.n, P2.c);
+  let p = mul(add(mul(cross(d, P2.n), h1), mul(cross(P1.n, d), h2)), 1 / (dl * dl));
+  const dn = mul(d, 1 / dl);
+  p = add(p, mul(dn, dot(sub(shape.bc, p), dn)));
+  if (len(sub(p, shape.bc)) > shape.size * 25) {
+    toast("Линия пересечения слишком далеко");
+    return;
+  }
+  snapshot();
+  const a = add(p, mul(dn, -shape.size * 0.5)),
+    b = add(p, mul(dn, shape.size * 0.5));
+  newLine(a, b, { kind: "trace", ext: true, name: `${P1.name} ∩ ${P2.name}` });
+  [P1, P2].forEach((pl) => {
+    planeReach(pl, a);
+    planeReach(pl, b);
+  });
+  toast(`Построена прямая ${P1.name} ∩ ${P2.name}`);
+}
+
+function onClick(mx, my) {
+  const h = computeHover(mx, my);
+  switch (tool) {
+    case "point": {
+      if (!h || h.kind === "point") return;
+      snapshot();
+      const p = addPoint(h.pos);
+      toast(
+        h.kind === "isect"
+          ? `${p.name} = ${h.label}`
+          : `Точка ${p.name} на ${h.kind === "line" ? (h.line.edge ? "ребре " + h.line.name : "прямой") : "плоскости " + h.plane.name}`,
+      );
+      break;
+    }
+    case "segment":
+    case "line": {
+      const p = resolvePoint(h);
+      if (!p) break;
+      if (!pending.length) {
+        pending = [p];
+        break;
+      }
+      const a = pending[0];
+      if (len(sub(a.p, p.p)) < 1e-6 * shape.size) break;
+      snapshot();
+      if (tool === "segment")
+        newLine(a.p, p.p, { kind: "seg", solid: true, name: a.name + p.name });
+      else
+        newLine(a.p, p.p, {
+          kind: "line",
+          solid: true,
+          ext: true,
+          name: "(" + a.name + p.name + ")",
+        });
+      pending = [];
+      break;
+    }
+    case "extend": {
+      if (!h) return;
+      const L = h.line;
+      snapshot();
+      if (L.user) {
+        L.user.ext = !L.user.ext;
+        if (!L.user.ext) {
+          delete L.user.tmin;
+          delete L.user.tmax;
+        }
+        toast(L.user.ext ? `${L.name} продлён до прямой` : `Продолжение ${L.name} убрано`);
+      } else {
+        const i = S.lines.findIndex((x) => x.src === L.key);
+        if (i >= 0) {
+          S.lines.splice(i, 1);
+          toast(`Продолжение ребра ${L.name} убрано`);
+        } else {
+          newLine(L.a, L.b, { kind: "ext", ext: true, name: "(" + L.name + ")", src: L.key });
+          toast(`Ребро ${L.name} продлено`);
+        }
+      }
+      break;
+    }
+    case "plane": {
+      if (!h) return;
+      const pl = h.plane,
+        ex = S.planes.find((p) => p.src === pl.key);
+      snapshot();
+      if (ex) {
+        S.planes = S.planes.filter((p) => p !== ex);
+        toast(`Продолжение плоскости ${pl.name} убрано`);
+      } else {
+        extendPlane(pl);
+        toast(`Плоскость ${pl.name} продлена`);
+      }
+      break;
+    }
+    case "parallel": {
+      if (!pending.length) {
+        if (h) pending = [{ line: h.line }];
+        break;
+      }
+      const p = resolvePoint(h);
+      if (!p) break;
+      const L = pending[0].line,
+        u = sub(L.b, L.a);
+      snapshot();
+      newLine(p.p, add(p.p, u), { kind: "par", ext: true, name: `${p.name} ∥ ${L.name}` });
+      toast(`Через ${p.name} проведена прямая, параллельная ${L.name}`);
+      pending = [];
+      break;
+    }
+    case "intersect": {
+      if (!h) return;
+      const obj = h.kind === "line" ? { line: h.line } : { plane: h.plane, hl: h.hl };
+      if (!pending.length) {
+        pending = [obj];
+        break;
+      }
+      const A = pending[0];
+      if (
+        (A.line && obj.line && A.line.key === obj.line.key) ||
+        (A.plane && obj.plane && A.plane.key === obj.plane.key)
+      )
+        return;
+      pending = [];
+      if (A.plane && obj.plane) {
+        intersectPlanes(A.plane, obj.plane);
+        break;
+      }
+      if (A.plane || obj.plane) {
+        intersectLinePlane(A.line || obj.line, A.plane || obj.plane);
+        break;
+      }
+      const L1 = A.line,
+        L2 = obj.line;
+      const r = lineLine(L1.a, sub(L1.b, L1.a), L2.a, sub(L2.b, L2.a));
+      if (r.parallel) {
+        toast("Прямые параллельны — общей точки нет");
+        break;
+      }
+      if (r.dist > 1e-4 * shape.size) {
+        toast("Прямые скрещиваются — они не лежат в одной плоскости");
+        break;
+      }
+      if (Math.max(Math.abs(r.s), Math.abs(r.t)) > 60) {
+        toast("Точка пересечения слишком далеко");
+        break;
+      }
+      snapshot();
+      ensureReach(L1, r.s);
+      ensureReach(L2, r.t);
+      const p = addPoint(r.p);
+      toast(`${p.name} = ${L1.name} ∩ ${L2.name}`);
+      break;
+    }
+    case "section": {
+      const p = resolvePoint(h);
+      if (!p) break;
+      if (pending.some((q) => len(sub(q.p, p.p)) < 1e-6 * shape.size)) break;
+      pending.push(p);
+      if (pending.length === 3) {
+        const pts = pending;
+        pending = [];
+        makeSection(pts);
+      }
+      break;
+    }
+    case "delete": {
+      if (!h) return;
+      snapshot();
+      if (h.kind === "point") {
+        S.points = S.points.filter((q) => q !== h.pt);
+        toast(`Точка ${h.pt.name} удалена`);
+      } else if (h.kind === "plane") {
+        S.planes = S.planes.filter((p) => p !== h.plane.user);
+        toast(`Плоскость ${h.plane.name} удалена`);
+      } else {
+        S.lines = S.lines.filter((l) => l !== h.line.user);
+        toast(`${h.line.name} удалена`);
+      }
+      break;
+    }
+  }
+  hover = computeHover(mx, my);
+  refreshList();
+  req();
+}
+const C = {};
+function readColors() {
+  const cs = getComputedStyle(document.documentElement);
+  [
+    "ink",
+    "hidden",
+    "accent",
+    "ext",
+    "par",
+    "face",
+    "facehover",
+    "hover",
+    "halo",
+    "plane",
+    "planef",
+    "sec0",
+    "sec1",
+    "sec2",
+    "secf0",
+    "secf1",
+    "secf2",
+  ].forEach((k) => (C[k] = cs.getPropertyValue("--c-" + k).trim()));
+  req();
+}
+function seg3(a, b) {
+  let va = toView(a),
+    vb = toView(b);
+  if (!opt.ortho) {
+    const near = 0.05 - cam.dist;
+    if (va[2] < near && vb[2] < near) return;
+    if (va[2] < near) va = lerp(va, vb, (near - va[2]) / (vb[2] - va[2]));
+    else if (vb[2] < near) vb = lerp(vb, va, (near - vb[2]) / (va[2] - vb[2]));
+  }
+  const pa = projV(va),
+    pb = projV(vb);
+  ctx.moveTo(pa.x, pa.y);
+  ctx.lineTo(pb.x, pb.y);
+}
+function stroke(a, b, col, w, dash) {
+  ctx.beginPath();
+  seg3(a, b);
+  ctx.strokeStyle = col;
+  ctx.lineWidth = w;
+  ctx.setLineDash(dash || []);
+  ctx.stroke();
+  ctx.setLineDash([]);
+}
+function polyPath(pts) {
+  ctx.beginPath();
+  pts.forEach((p, i) => {
+    const s = project(p);
+    i ? ctx.lineTo(s.x, s.y) : ctx.moveTo(s.x, s.y);
+  });
+  ctx.closePath();
+}
+function lineRange(L, t0, t1) {
+  const u = sub(L.b, L.a);
+  return [add(L.a, mul(u, t0)), add(L.a, mul(u, t1))];
+}
+function label(txt, x, y, col, size) {
+  ctx.font = `italic 700 ${size || 17}px "PT Serif", Georgia, serif`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.lineWidth = 4;
+  ctx.strokeStyle = C.halo;
+  ctx.lineJoin = "round";
+  ctx.strokeText(txt, x, y);
+  ctx.fillStyle = col;
+  ctx.fillText(txt, x, y);
+}
+function dotAt(p, r, fill, ring) {
+  const s = project(p);
+  ctx.beginPath();
+  ctx.arc(s.x, s.y, r, 0, Math.PI * 2);
+  ctx.fillStyle = fill;
+  ctx.fill();
+  if (ring) {
+    ctx.lineWidth = 1.6;
+    ctx.strokeStyle = ring;
+    ctx.stroke();
+  }
+  return s;
+}
+
+let raf = 0;
+function req() {
+  if (!raf) raf = requestAnimationFrame(render);
+}
+function render() {
+  raf = 0;
+  updateHint();
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+  ctx.lineCap = "round";
+  const V = shape.verts;
+  shape.faces.forEach((f) => (f.front = isFront(f)));
+
+  if (opt.faces) {
+    shape.faces
+      .map((f) => ({ f, z: toView(f.c)[2] }))
+      .sort((a, b) => b.z - a.z)
+      .forEach(({ f }) => {
+        polyPath(f.idx.map((i) => V[i].p));
+        ctx.fillStyle = C.face;
+        ctx.fill();
+      });
+  }
+  S.planes.forEach((pl) => {
+    const q = planeQuad(pl);
+    polyPath(q);
+    ctx.fillStyle = C.planef;
+    ctx.fill();
+    ctx.setLineDash([3, 5]);
+    ctx.lineWidth = 1.2;
+    ctx.strokeStyle = C.plane;
+    ctx.stroke();
+    ctx.setLineDash([]);
+    const s = project(q[0]);
+    if (opt.labels) label(pl.name, s.x, s.y - 12, C.plane, 14);
+  });
+  pending.forEach((pd) => {
+    if (pd.hl) {
+      polyPath(pd.hl);
+      ctx.globalAlpha = 0.5;
+      ctx.fillStyle = C.planef;
+      ctx.fill();
+      ctx.globalAlpha = 1;
+      ctx.lineWidth = 2.2;
+      ctx.strokeStyle = C.plane;
+      ctx.stroke();
+    }
+  });
+  if (hover && hover.hl) {
+    polyPath(hover.hl);
+    ctx.fillStyle = tool === "delete" ? C.secf0 : C.facehover;
+    ctx.fill();
+  }
+
+  S.sections.forEach((s) => {
+    polyPath(s.poly);
+    ctx.fillStyle = C["secf" + s.color];
+    ctx.fill();
+  });
+
+  for (const e of shape.edges) {
+    const vis = e.faces.some((fi) => shape.faces[fi].front);
+    if (vis) stroke(V[e.i].p, V[e.j].p, C.ink, 2);
+    else
+      stroke(
+        V[e.i].p,
+        V[e.j].p,
+        opt.hidden ? C.hidden : C.ink,
+        opt.hidden ? 1.4 : 2,
+        opt.hidden ? [7, 6] : null,
+      );
+  }
+
+  for (const L of allLines()) {
+    if (!L.user) continue;
+    const l = L.user,
+      col = l.kind === "par" ? C.par : l.kind === "trace" ? C.plane : C.accent;
+    if (l.ext) {
+      const [a, b] = lineRange(L, L.t0, L.t1);
+      ctx.globalAlpha = 0.62;
+      stroke(a, b, col, 1.3);
+      ctx.globalAlpha = 1;
+    }
+    if (l.solid) stroke(l.a, l.b, col, 2.4);
+  }
+
+  S.sections.forEach((s) =>
+    s.poly.forEach((p, i) => stroke(p, s.poly[(i + 1) % s.poly.length], C["sec" + s.color], 2.4)),
+  );
+  pending.forEach((pd) => {
+    if (pd.line) {
+      const [a, b] = lineRange(pd.line, pd.line.t0, pd.line.t1);
+      ctx.globalAlpha = 0.45;
+      stroke(a, b, C.accent, 7);
+      ctx.globalAlpha = 1;
+    }
+  });
+
+  if (hover && hover.kind === "line") {
+    const L = hover.line,
+      [a, b] = lineRange(L, L.t0, L.t1);
+    ctx.globalAlpha = 0.35;
+    stroke(a, b, C.hover, 7);
+    ctx.globalAlpha = 1;
+  }
+  const hp = hover && hover.pos;
+  if (hp && (tool === "segment" || tool === "line") && pending.length) {
+    if (tool === "line") {
+      const u = sub(hp, pending[0].p);
+      if (len(u) > 1e-6) {
+        const E = EXT / len(u);
+        ctx.globalAlpha = 0.5;
+        stroke(add(pending[0].p, mul(u, -E)), add(hp, mul(u, E)), C.accent, 1.2, [4, 5]);
+        ctx.globalAlpha = 1;
+      }
+    }
+    stroke(pending[0].p, hp, C.accent, 2, [6, 5]);
+  }
+  if (hp && tool === "parallel" && pending.length) {
+    const L = pending[0].line,
+      u = norm(sub(L.b, L.a));
+    stroke(add(hp, mul(u, -EXT)), add(hp, mul(u, EXT)), C.par, 1.6, [6, 5]);
+  }
+  if (tool === "section" && pending.length) {
+    const pts = pending.map((p) => p.p);
+    if (hp && pending.length === 2 && !pending.some((q) => len(sub(q.p, hp)) < 1e-9)) {
+      polyPath([...pts, hp]);
+      ctx.fillStyle = C.facehover;
+      ctx.fill();
+    }
+    if (hp && pending.length < 3) stroke(pts[pts.length - 1], hp, C.hover, 1.5, [5, 5]);
+    if (pts.length === 2) stroke(pts[0], pts[1], C.hover, 1.5, [5, 5]);
+  }
+  if (opt.isnap && hoverFilter()?.place) {
+    ctx.strokeStyle = C.hover;
+    ctx.lineWidth = 1.6;
+    for (const q of getIsects()) {
+      const s = project(q.p);
+      ctx.beginPath();
+      ctx.moveTo(s.x, s.y - 5);
+      ctx.lineTo(s.x + 5, s.y);
+      ctx.lineTo(s.x, s.y + 5);
+      ctx.lineTo(s.x - 5, s.y);
+      ctx.closePath();
+      ctx.stroke();
+    }
+  }
+  const bcS = project(shape.bc);
+  V.forEach((v) => {
+    const s = dotAt(v.p, 3.4, C.ink);
+    if (opt.labels) {
+      let dx = s.x - bcS.x,
+        dy = s.y - bcS.y;
+      const l = Math.hypot(dx, dy) || 1;
+      label(v.n, s.x + (dx / l) * 17, s.y + (dy / l) * 17, C.ink);
+    }
+  });
+  const secColor = (p) => {
+    const s = S.sections.find((s) => s.poly.some((q) => len(sub(q, p.p)) < 1e-6 * shape.size));
+    return s ? C["sec" + s.color] : C.sec0;
+  };
+  S.points.forEach((p) => {
+    const col = p.kind === "sec" ? secColor(p) : C.accent;
+    const s = dotAt(p.p, 4.2, col, C.halo);
+    if (opt.labels) label(p.name, s.x + 12, s.y - 12, col);
+  });
+  pending.forEach((pd) => {
+    if (pd.p) {
+      const s = project(pd.p);
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, 8, 0, 7);
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = C.accent;
+      ctx.stroke();
+    }
+  });
+
+  if (hover) {
+    const s = project(hover.pos);
+    if (hover.kind === "point") {
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, 9, 0, 7);
+      ctx.lineWidth = 2.2;
+      ctx.strokeStyle = tool === "delete" ? C.sec0 : C.hover;
+      ctx.stroke();
+    } else if (hoverFilter()?.place) {
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, 4.6, 0, 7);
+      ctx.fillStyle = C.halo;
+      ctx.fill();
+      ctx.lineWidth = 2;
+      ctx.strokeStyle = C.hover;
+      ctx.stroke();
+      if (opt.labels && tool === "point") {
+        ctx.globalAlpha = 0.55;
+        label(nextName(), s.x + 12, s.y - 12, C.accent);
+        ctx.globalAlpha = 1;
+      }
+      if (hover.kind === "isect") {
+        ctx.font = '500 12px "Golos Text", system-ui, sans-serif';
+        ctx.textAlign = "left";
+        ctx.textBaseline = "middle";
+        ctx.lineWidth = 4;
+        ctx.strokeStyle = C.halo;
+        ctx.strokeText(hover.label, s.x + 12, s.y + 14);
+        ctx.fillStyle = C.hover;
+        ctx.fillText(hover.label, s.x + 12, s.y + 14);
+      }
+    }
+  }
+  cv.style.cursor =
+    down && down.drag ? "grabbing" : tool === "rotate" ? "grab" : hover ? "pointer" : "crosshair";
+}
+const I = {
+  rotate: '<path d="M20 12a8 8 0 1 1-2.3-5.6"/><path d="M20 4v5h-5"/>',
+  point:
+    '<path d="M4 19 20 5" opacity=".35"/><circle cx="12" cy="12" r="3.4" fill="currentColor"/>',
+  segment:
+    '<path d="M5 18 19 6"/><circle cx="5" cy="18" r="2.2" fill="currentColor"/><circle cx="19" cy="6" r="2.2" fill="currentColor"/>',
+  line: '<path d="M2 21 22 3"/><circle cx="8" cy="15.6" r="2" fill="currentColor"/><circle cx="16" cy="8.4" r="2" fill="currentColor"/>',
+  plane:
+    '<path d="M3 17 8 7h13l-5 10z" fill="currentColor" fill-opacity=".15"/><path d="M1 21l2-4M16 17l-2 4M8 7l2-4M21 7l2-4" stroke-dasharray="1.5 2"/>',
+  extend: '<path d="M8 16 16 8"/><path d="M2.5 21.5l3-3M18.5 5.5l3-3" stroke-dasharray="1.5 2.5"/>',
+  parallel: '<path d="M3 14 14 3M10 21 21 10"/>',
+  intersect:
+    '<path d="M3 5l18 14M3 19 21 5"/><circle cx="12" cy="12" r="2.4" fill="currentColor"/>',
+  section: '<path d="M3 9l6-5 12 4-4 12-12-3z" fill="currentColor" fill-opacity=".2"/>',
+  delete: '<path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/>',
+};
+const TOOLS = [
+  ["rotate", "Вращать"],
+  ["point", "Точка"],
+  ["segment", "Отрезок"],
+  ["line", "Прямая"],
+  ["extend", "Продлить"],
+  ["plane", "Плоскость"],
+  ["parallel", "Параллель"],
+  ["intersect", "Пересечь"],
+  ["section", "Сечение"],
+  ["delete", "Удалить"],
+];
+$("#toolbar").innerHTML = TOOLS.map(
+  ([id, t], i) =>
+    `<button class="tool" data-tool="${id}" title="${t} (${(i + 1) % 10})"><kbd>${(i + 1) % 10}</kbd><svg viewBox="0 0 24 24">${I[id]}</svg>${t}</button>`,
+).join("");
+$("#toolbar").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-tool]");
+  if (b) setTool(b.dataset.tool);
+});
+function setTool(id) {
+  tool = id;
+  pending = [];
+  hover = mouse ? computeHover(mouse.x, mouse.y) : null;
+  document
+    .querySelectorAll(".tool")
+    .forEach((b) => b.classList.toggle("on", b.dataset.tool === id));
+  req();
+}
+
+function updateHint() {
+  const n = pending.length;
+  const H = {
+    rotate:
+      "Тяните мышью, чтобы вращать фигуру. Колесо — масштаб, правая кнопка или Shift — сдвиг.",
+    point:
+      opt.isnap && getIsects().length && !opt.ratio
+        ? "Ромбики — пересечения прямых и плоскостей. Наведите на ромбик, и точка встанет ровно в пересечение. Или кликните по ребру, прямой или грани."
+        : opt.ratio
+          ? `Кликните по ребру или отрезку — точка разделит его в отношении ${$("#rm").value}:${$("#rn").value} от ближнего конца.`
+          : "Кликните по ребру, прямой или грани, чтобы поставить точку. У середины ребра срабатывает привязка.",
+    segment: n
+      ? `Выберите второй конец отрезка (первый — ${pending[0].name}).`
+      : "Выберите первую точку отрезка — вершину, точку или место на ребре.",
+    line: n
+      ? `Выберите вторую точку прямой (первая — ${pending[0].name}).`
+      : "Выберите первую точку, через которую пройдёт прямая.",
+    extend:
+      "Кликните по ребру или отрезку, чтобы продлить его до прямой. Повторный клик убирает продолжение.",
+    parallel: n
+      ? `Выберите точку, через которую пройдёт прямая, параллельная ${pending[0].line.name}.`
+      : "Выберите ребро или прямую, которой будет параллельна новая прямая.",
+    plane:
+      "Кликните по грани или сечению, чтобы продлить его плоскость. Повторный клик убирает продолжение.",
+    intersect: n
+      ? `Выберите второй объект: пересечение с ${(pending[0].line || pending[0].plane).name}. Прямая ∩ прямая или прямая ∩ плоскость дают точку, плоскость ∩ плоскость — прямую.`
+      : "Выберите прямую, ребро, грань или плоскость. Продолжения достроятся сами.",
+    section: `Выберите три точки плоскости сечения: ${n} из 3${n ? " (" + pending.map((p) => p.name).join(", ") + ")" : ""}. Esc — сбросить выбор.`,
+    delete:
+      "Кликните по своей точке, прямой или плоскости, чтобы удалить её. Сечения удаляются из списка слева.",
+  };
+  $("#hint").textContent = H[tool];
+}
+
+function buildShapeButtons() {
+  $("#shapes").innerHTML = Object.entries(SHAPES)
+    .map(
+      ([k, s]) =>
+        `<button class="shape${k === shapeType ? " on" : ""}" data-shape="${k}"><svg viewBox="0 0 30 30">${s.icon}</svg>${s.t}</button>`,
+    )
+    .join("");
+}
+$("#shapes").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-shape]");
+  if (!b || b.dataset.shape === shapeType) return;
+  shapeType = b.dataset.shape;
+  buildShapeButtons();
+  buildParams();
+  rebuild();
+  resetView();
+});
+function buildParams() {
+  const s = SHAPES[shapeType],
+    P = vals[shapeType];
+  let h = s.p
+    .map(
+      ([
+        k,
+        t,
+        mn,
+        mx,
+      ]) => `<div class="slider"><label for="p_${k}">${t}</label><output id="o_${k}">${(+P[k]).toFixed(1)}</output>
+    <input type="range" id="p_${k}" data-p="${k}" min="${mn}" max="${mx}" step="0.1" value="${P[k]}"></div>`,
+    )
+    .join("");
+  if (shapeType === "pyr3")
+    h += `<button class="minibtn" id="regTet">Сделать правильный тетраэдр</button>`;
+  if (shapeType === "pyr4") h += `<button class="minibtn" id="regPyr">Все рёбра равны</button>`;
+  $("#params").innerHTML = h;
+}
+$("#params").addEventListener("input", (e) => {
+  const k = e.target.dataset.p;
+  if (!k) return;
+  vals[shapeType][k] = +e.target.value;
+  $("#o_" + k).textContent = (+e.target.value).toFixed(1);
+  rebuild();
+});
+$("#params").addEventListener("click", (e) => {
+  const P = vals[shapeType];
+  if (e.target.id === "regTet") P.h = +(P.a * Math.sqrt(2 / 3)).toFixed(2);
+  else if (e.target.id === "regPyr") P.h = +(P.a / Math.SQRT2).toFixed(2);
+  else return;
+  buildParams();
+  rebuild();
+});
+function hasConstructions() {
+  return S.points.length || S.lines.length || S.sections.length || S.planes.length;
+}
+function rebuild() {
+  buildShape();
+  if (hasConstructions()) {
+    S.points = [];
+    S.lines = [];
+    S.sections = [];
+    S.planes = [];
+    toast("Фигура изменилась — построения сброшены");
+  }
+  history = [];
+  pending = [];
+  hover = null;
+  refreshList();
+  req();
+}
+
+function refreshList() {
+  isectCache = null;
+  const el = $("#objs");
+  if (!hasConstructions()) {
+    el.innerHTML =
+      '<div class="empty">Здесь появятся точки, прямые и сечения. Начните с точек на рёбрах, затем выберите инструмент «Сечение».</div>';
+    return;
+  }
+  let h = "";
+  S.sections.forEach((s) => {
+    h += `<div class="obj"><span class="sw" style="background:var(--c-sec${s.color})"></span>
+    <div class="oi"><b>${esc(s.name)}</b><small>Сечение, ${POLY[s.poly.length] || s.poly.length + "-угольник"}, S ≈ ${s.area.toFixed(2)}</small></div>
+    <button class="minibtn" data-secpl="${s.id}" title="Продлить плоскость сечения">${S.planes.some((p) => p.src === "s" + s.id) ? "Скрыть плоскость" : "Продлить"}</button>
+    <button class="del" data-del="s${s.id}" aria-label="Удалить сечение">×</button></div>`;
+  });
+  S.points.forEach((p) => {
+    h += `<div class="obj"><span class="sw dot" style="background:${p.kind === "sec" ? "var(--c-sec0)" : "var(--c-accent)"}"></span>
+    <div class="oi"><input value="${esc(p.name)}" data-ren="${p.id}" aria-label="Имя точки"><small>${p.kind === "sec" ? "Вершина сечения" : "Точка"} (${p.p.map((x) => x.toFixed(2)).join("; ")})</small></div>
+    <button class="del" data-del="p${p.id}" aria-label="Удалить точку">×</button></div>`;
+  });
+  S.planes.forEach((p) => {
+    h += `<div class="obj"><span class="sw" style="background:var(--c-plane);opacity:.7"></span>
+    <div class="oi"><b>${esc(p.name)}</b><small>Плоскость ${p.kind === "sec" ? "сечения" : "грани"}, продлена</small></div>
+    <button class="del" data-del="q${p.id}" aria-label="Удалить плоскость">×</button></div>`;
+  });
+  const TL = {
+    seg: "Отрезок",
+    line: "Прямая",
+    ext: "Продолжение ребра",
+    par: "Параллельная прямая",
+    trace: "Линия пересечения плоскостей",
+  };
+  S.lines.forEach((l) => {
+    const extra =
+      l.kind === "seg" ? `, длина ${len(sub(l.b, l.a)).toFixed(2)}${l.ext ? ", продлён" : ""}` : "";
+    h += `<div class="obj"><span class="sw" style="background:${l.kind === "par" ? "var(--c-par)" : "var(--c-accent)"};height:3px"></span>
+    <div class="oi"><b>${esc(l.name)}</b><small>${TL[l.kind]}${extra}</small></div>
+    <button class="del" data-del="l${l.id}" aria-label="Удалить">×</button></div>`;
+  });
+  el.innerHTML = h;
+}
+$("#objs").addEventListener("click", (e) => {
+  const sp = e.target.dataset.secpl;
+  if (sp) {
+    const s = S.sections.find((x) => x.id === +sp);
+    if (!s) return;
+    snapshot();
+    const k = "s" + s.id;
+    if (S.planes.some((p) => p.src === k)) S.planes = S.planes.filter((p) => p.src !== k);
+    else extendPlane(secPlane(s));
+    refreshList();
+    req();
+    return;
+  }
+  const d = e.target.dataset.del;
+  if (!d) return;
+  const id = +d.slice(1);
+  snapshot();
+  if (d[0] === "s") S.sections = S.sections.filter((x) => x.id !== id);
+  if (d[0] === "p") S.points = S.points.filter((x) => x.id !== id);
+  if (d[0] === "l") S.lines = S.lines.filter((x) => x.id !== id);
+  if (d[0] === "q") S.planes = S.planes.filter((x) => x.id !== id);
+  if (d[0] === "s") S.planes = S.planes.filter((x) => x.src !== "s" + id);
+  pending = [];
+  hover = null;
+  refreshList();
+  req();
+});
+$("#objs").addEventListener("change", (e) => {
+  const id = +e.target.dataset.ren;
+  if (!id) return;
+  const p = S.points.find((x) => x.id === id),
+    nv = e.target.value.trim();
+  if (!p) return;
+  if (!nv || allPoints().some((q) => q !== p && q.name === nv)) {
+    toast(nv ? `Имя ${nv} уже занято` : "Имя не может быть пустым");
+    e.target.value = p.name;
+    return;
+  }
+  snapshot();
+  p.name = nv;
+  req();
+});
+
+document.querySelectorAll("[data-opt]").forEach((cb) =>
+  cb.addEventListener("change", () => {
+    const k = cb.dataset.opt;
+    opt[k] = cb.checked;
+    if (k === "ortho") resetView();
+    hover = null;
+    req();
+  }),
+);
+["#rm", "#rn"].forEach((s) => $(s).addEventListener("input", req));
+
+let toastT = 0;
+function toast(msg) {
+  const t = $("#toast");
+  t.textContent = msg;
+  t.classList.add("show");
+  clearTimeout(toastT);
+  toastT = setTimeout(() => t.classList.remove("show"), 2600);
+}
+
+$("#undo").onclick = $("#undo2").onclick = undo;
+$("#clear").onclick = () => {
+  if (!hasConstructions()) return;
+  snapshot();
+  S.points = [];
+  S.lines = [];
+  S.sections = [];
+  S.planes = [];
+  pending = [];
+  hover = null;
+  refreshList();
+  req();
+  toast("Построения очищены. Отменить — Ctrl+Z");
+};
+$("#resetView").onclick = resetView;
+const zoom = (k) => {
+  cam.dist = clamp(cam.dist * k, shape.size * (opt.ortho ? 1 : 2.2), shape.size * 9);
+  req();
+};
+$("#zin").onclick = () => zoom(1 / 1.15);
+$("#zout").onclick = () => zoom(1.15);
+let down = null;
+cv.addEventListener("pointerdown", (e) => {
+  cv.setPointerCapture(e.pointerId);
+  down = {
+    x: e.offsetX,
+    y: e.offsetY,
+    btn: e.button,
+    pan: e.button !== 0 || e.shiftKey,
+    drag: false,
+    yaw: cam.yaw,
+    pitch: cam.pitch,
+    px: pan.x,
+    py: pan.y,
+  };
+});
+cv.addEventListener("pointermove", (e) => {
+  mouse = { x: e.offsetX, y: e.offsetY };
+  if (down) {
+    const dx = e.offsetX - down.x,
+      dy = e.offsetY - down.y;
+    if (!down.drag && Math.hypot(dx, dy) > 4) down.drag = true;
+    if (down.drag) {
+      if (down.pan) {
+        pan.x = down.px + dx;
+        pan.y = down.py + dy;
+      } else {
+        cam.yaw = down.yaw - dx * 0.008;
+        cam.pitch = clamp(down.pitch + dy * 0.008, -1.55, 1.55);
+      }
+      hover = null;
+      req();
+      return;
+    }
+  }
+  hover = computeHover(mouse.x, mouse.y);
+  req();
+});
+cv.addEventListener("pointerup", (e) => {
+  const d = down;
+  down = null;
+  if (d && !d.drag && d.btn === 0) onClick(e.offsetX, e.offsetY);
+  else {
+    hover = computeHover(e.offsetX, e.offsetY);
+    req();
+  }
+});
+cv.addEventListener("pointerleave", () => {
+  if (!down) {
+    hover = null;
+    mouse = null;
+    req();
+  }
+});
+cv.addEventListener("contextmenu", (e) => e.preventDefault());
+cv.addEventListener(
+  "wheel",
+  (e) => {
+    e.preventDefault();
+    zoom(Math.exp(e.deltaY * 0.0012));
+  },
+  { passive: false },
+);
+addEventListener("keydown", (e) => {
+  if (e.target.tagName === "INPUT") return;
+  if (
+    ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") ||
+    ((e.ctrlKey || e.metaKey) && e.code === "KeyZ")
+  ) {
+    e.preventDefault();
+    undo();
+    return;
+  }
+  if (e.key === "Escape") {
+    pending = [];
+    req();
+    return;
+  }
+  if (/^[0-9]$/.test(e.key)) {
+    const i = (+e.key + 9) % 10;
+    if (TOOLS[i]) setTool(TOOLS[i][0]);
+  }
+});
+function resize() {
+  const r = $("#wrap").getBoundingClientRect();
+  DPR = window.devicePixelRatio || 1;
+  W = r.width;
+  H = r.height;
+  cv.width = Math.round(W * DPR);
+  cv.height = Math.round(H * DPR);
+  F = Math.min(W, H) * 0.95;
+  req();
+}
+new ResizeObserver(resize).observe($("#wrap"));
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", readColors);
+new MutationObserver(readColors).observe(document.documentElement, {
+  attributes: true,
+  attributeFilter: ["data-theme"],
+});
+
+buildShapeButtons();
+buildParams();
+buildShape();
+refreshList();
+readColors();
+setTool("point");
+resize();
+resetView();
+document.fonts && document.fonts.ready.then(req);
